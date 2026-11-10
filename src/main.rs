@@ -39,6 +39,7 @@ fn run() -> Result<(), String> {
 
     let output = match command.as_str() {
         "export" => commands::export::run(&mut database, parsed)?,
+        "get" => commands::get::run(&mut database, &parsed.rest)?,
         other => return Err(format!("'{other}' is not a timew-rs command yet.")),
     };
 

@@ -304,8 +304,10 @@ fn escape(input: &str, c: char) -> String {
 
 /// Port of `quoteIfNeeded()` in `util.cpp`: wrap in double quotes (escaping
 /// any embedded `"`) if the tag contains a `"`, a space, or any character
-/// from `-+/()<^!=~_%`.
-fn quote_if_needed(input: &str) -> String {
+/// from `-+/()<^!=~_%`. Public because `commands::get` reuses it for
+/// rendering `dom.tags`/`dom.tracked.*.tags` listings the same way
+/// `joinQuotedIfNeeded` does in the C++ source.
+pub fn quote_if_needed(input: &str) -> String {
     const OPERATOR_CHARS: &[char] = &['-', '+', '/', '(', ')', '<', '^', '!', '=', '~', '_', '%'];
 
     let needs_quoting =
