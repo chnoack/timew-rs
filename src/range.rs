@@ -137,6 +137,22 @@ impl Range {
         other.starts_within(self) && other.ends_within(self)
     }
 
+    /// Like `overlaps`, but also true for two started ranges that share
+    /// exactly the same start instant even if one or both are zero-width
+    /// (e.g. `[p, p)` "intersects" `[p, q)` at the single point `p`, even
+    /// though they don't `overlap` in the half-open sense). This is the
+    /// predicate used by `IntervalFilterAllInRange` to decide whether a
+    /// stored interval matches a query range -- using plain `overlaps`
+    /// there would incorrectly exclude a query range of `[p, p)` (used by
+    /// some range-hint queries) matching an interval that starts exactly at
+    /// `p`.
+    pub fn intersects(&self, other: &Range) -> bool {
+        if self.overlaps(other) {
+            return true;
+        }
+        self.is_started() && other.is_started() && self.start == other.start
+    }
+
     /// Total duration in seconds. For an open interval this is measured
     /// against `now` (this IS a "clip to now" case, but it only applies to
     /// duration reporting, not to the overlap/containment predicates above).
@@ -223,6 +239,27 @@ mod tests {
         let inner = Range::new(1200, 1800);
         assert!(outer.encloses(&inner));
         assert!(!inner.encloses(&outer));
+    }
+
+    #[test]
+    fn intersects_matches_overlaps_for_normal_ranges() {
+        let a = Range::new(1000, 2000);
+        let b = Range::new(1500, 2500);
+        assert!(a.intersects(&b));
+        let c = Range::new(2000, 3000);
+        assert!(!a.overlaps(&c));
+        assert!(!a.intersects(&c)); // different start, no overlap -> no intersect either
+    }
+
+    #[test]
+    fn intersects_true_for_shared_start_even_without_overlap() {
+        // Zero-width [1000,1000) and [1000,2000) don't `overlap` (half-open
+        // semantics), but DO `intersect` at the shared point 1000.
+        let zero_width = Range::new(1000, 1000);
+        let normal = Range::new(1000, 2000);
+        assert!(!zero_width.overlaps(&normal));
+        assert!(zero_width.intersects(&normal));
+        assert!(normal.intersects(&zero_width));
     }
 
     #[test]
