@@ -209,6 +209,16 @@ impl Interval {
     }
 }
 
+/// The (year, month) a datafile keyed by this epoch's date would use, i.e.
+/// the `YYYY`/`MM` in `YYYY-MM.data`. Used by `Database::datafile_index_for`
+/// to route an interval to the right file by its **start** timestamp
+/// (matches `Database::addInterval`'s use of `interval.start.year()` /
+/// `.month()`).
+pub fn year_month_of(epoch: Epoch) -> (i64, u32) {
+    let (y, mo, ..) = civil_from_epoch(epoch);
+    (y, mo)
+}
+
 /// Format a Unix epoch as the compact UTC ISO form `YYYYMMDDTHHMMSSZ`.
 /// Hand-rolled (no external datetime crate) since this is the only format
 /// ever needed for on-disk/JSON timestamps.
