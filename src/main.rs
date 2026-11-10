@@ -1,3 +1,5 @@
+#![allow(dead_code)] // scaffold phase: many items are not wired up to commands yet
+
 mod cli;
 mod commands;
 mod database;
