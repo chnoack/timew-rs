@@ -10,6 +10,6 @@ pub mod delete;
 pub mod cancel;
 pub mod export;
 pub mod summary;
-pub mod tags_cmd;
+pub mod tags;
 pub mod get;
 pub mod undo;

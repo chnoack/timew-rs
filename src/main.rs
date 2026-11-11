@@ -37,9 +37,12 @@ fn run() -> Result<(), String> {
     let db_root = resolve_db_root()?;
     let mut database = database::Database::open(db_root.join("data")).map_err(|e| e.to_string())?;
 
+    let verbose = !parsed.hint("quiet");
+
     let output = match command.as_str() {
         "export" => commands::export::run(&mut database, parsed)?,
         "get" => commands::get::run(&mut database, &parsed.rest)?,
+        "tags" => commands::tags::run(&mut database, parsed, verbose)?,
         other => return Err(format!("'{other}' is not a timew-rs command yet.")),
     };
 
