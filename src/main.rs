@@ -43,6 +43,7 @@ fn run() -> Result<(), String> {
         "export" => commands::export::run(&mut database, parsed)?,
         "get" => commands::get::run(&mut database, &parsed.rest)?,
         "tags" => commands::tags::run(&mut database, parsed, verbose)?,
+        "summary" => commands::summary::run(&mut database, parsed)?,
         other => return Err(format!("'{other}' is not a timew-rs command yet.")),
     };
 
