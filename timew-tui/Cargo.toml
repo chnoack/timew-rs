@@ -1,0 +1,10 @@
+[package]
+name = "timew-tui"
+version = "0.1.0"
+edition = "2024"
+description = "Read-only terminal UI for a Timewarrior database"
+
+[dependencies]
+timew-rs = { path = ".." }
+jiff = "0.2.42"
+ratatui = "0.30"

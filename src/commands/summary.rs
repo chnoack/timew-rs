@@ -116,20 +116,47 @@ pub fn run(database: &mut Database, mut args: ParsedArgs) -> Result<String, Stri
     Ok(render_table(&range, &tracked))
 }
 
-struct Row {
-    week: Option<String>,
-    date: Option<String>,
-    day_name: Option<String>,
-    id: String,
-    tags: String,
-    annotation: String,
-    start: String,
-    end: String,
-    time: String,
-    total: String,
+/// One rendered summary row, with every cell already formatted as text.
+/// `week`/`date`/`day_name` are only set on the first row of a day, and
+/// `total` only on the last one (empty otherwise).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub week: Option<String>,
+    pub date: Option<String>,
+    pub day_name: Option<String>,
+    pub id: String,
+    pub tags: String,
+    pub annotation: String,
+    pub start: String,
+    pub end: String,
+    pub time: String,
+    pub total: String,
+    /// Index into the `tracked` slice passed to `build` of the interval
+    /// this row was derived from (a multi-day interval yields several rows
+    /// with the same index).
+    pub source: usize,
+}
+
+/// The structured result of a summary: its rows plus the grand total in
+/// seconds. Shared by the text renderer and `timew-tui`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Summary {
+    pub rows: Vec<Row>,
+    pub grand_total: i64,
 }
 
 fn render_table(range: &Range, tracked: &[Tracked]) -> String {
+    let summary = build(range, tracked);
+    format_table(&summary.rows, summary.grand_total)
+}
+
+/// Build the summary rows for `tracked` (as returned by
+/// `Database::tracked_in_range(range)`) over `range`. `tracked` must be
+/// non-empty when `range` is unbounded on either side.
+pub fn build(range: &Range, tracked: &[Tracked]) -> Summary {
+    if tracked.is_empty() && !(range.is_started() && range.is_ended()) {
+        return Summary { rows: Vec::new(), grand_total: 0 };
+    }
     let now = jiff::Timestamp::now().as_second();
 
     let days_start = if range.is_started() { range.start } else { tracked.first().unwrap().interval.range.start };
@@ -157,7 +184,7 @@ fn render_table(range: &Range, tracked: &[Tracked]) -> String {
         let mut daily_total: i64 = 0;
         let rows_before_this_day = rows.len();
 
-        for t in tracked.iter().filter(|t| day_range.intersects(&t.interval.range)) {
+        for (source, t) in tracked.iter().enumerate().filter(|(_, t)| day_range.intersects(&t.interval.range)) {
             // Skip a still-open interval on a day that hasn't happened yet
             // relative to "now" (mirrors `if (track.is_open() && day > now) continue;`).
             if t.interval.is_open() && day_start_epoch > now {
@@ -194,6 +221,7 @@ fn render_table(range: &Range, tracked: &[Tracked]) -> String {
                 end: if t.interval.is_open() { "-".to_string() } else { time_of_day_string(today_end) },
                 time: format_hours(total),
                 total: String::new(),
+                source,
             });
 
             daily_total += total;
@@ -210,7 +238,7 @@ fn render_table(range: &Range, tracked: &[Tracked]) -> String {
         day = day.tomorrow().unwrap();
     }
 
-    format_table(&rows, grand_total)
+    Summary { rows, grand_total }
 }
 
 fn format_table(rows: &[Row], grand_total: i64) -> String {
@@ -331,14 +359,14 @@ fn time_of_day_string(epoch: Epoch) -> String {
 /// minutes and seconds zero-padded to 2 digits), matching
 /// `Duration::formatHours()`'s output confirmed against real captured
 /// samples (e.g. "1:30:00", "24:00:00", "39:00:00").
-fn format_hours(total_seconds: i64) -> String {
+pub fn format_hours(total_seconds: i64) -> String {
     let h = total_seconds / 3600;
     let m = (total_seconds % 3600) / 60;
     let s = total_seconds % 60;
     format!("{h}:{m:02}:{s:02}")
 }
 
-fn local_iso_extended(epoch: Epoch) -> String {
+pub fn local_iso_extended(epoch: Epoch) -> String {
     let zoned = Zoned::new(jiff::Timestamp::from_second(epoch).unwrap(), jiff::tz::TimeZone::system());
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",

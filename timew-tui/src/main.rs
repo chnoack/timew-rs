@@ -1,0 +1,1891 @@
+//! `timew-tui`: a read-only terminal UI for a Timewarrior database.
+//!
+//! Phase 1 scope:
+//!   - open the database from `$TIMEWARRIORDB`, else the standard location
+//!   - show a scrollable summary (same rows as `timew summary`)
+//!   - quick filters: Day, Yesterday, Month (default), Year
+//!   - strictly read-only: nothing is ever written to the database
+
+use std::env;
+use std::io;
+use std::path::PathBuf;
+
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
+use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Cell, Clear, List, ListItem, ListState, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    TableState,
+};
+use ratatui::{DefaultTerminal, Frame};
+
+use timew_rs::commands::summary::{self, Summary};
+use timew_rs::database::{Database, Tracked};
+use timew_rs::datetime::{expand_range_hint, parse_datetime};
+use timew_rs::range::Range;
+
+// ---------------------------------------------------------------------------
+// Database location
+// ---------------------------------------------------------------------------
+
+/// Resolve the database root like Timewarrior's `paths.cpp`:
+///   1. `$TIMEWARRIORDB` if set
+///   2. `~/.timewarrior` if it exists (legacy layout)
+///   3. `$XDG_DATA_HOME/timewarrior`, defaulting to `~/.local/share/timewarrior`
+fn resolve_db_root() -> Result<PathBuf, String> {
+    if let Some(db) = env::var_os("TIMEWARRIORDB").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(db));
+    }
+    let home = env::var_os("HOME").filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(home) = &home {
+        let legacy = home.join(".timewarrior");
+        if legacy.is_dir() {
+            return Ok(legacy);
+        }
+    }
+    let data_home = env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".local").join("share")))
+        .ok_or("Cannot locate the database: neither TIMEWARRIORDB nor HOME is set.")?;
+    Ok(data_home.join("timewarrior"))
+}
+
+// ---------------------------------------------------------------------------
+// Filters
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Filter {
+    Day,
+    Yesterday,
+    Month,
+    Year,
+    /// A user-entered date range (`App::custom_range`).
+    Custom,
+}
+
+impl Filter {
+    /// The preset filters (quick buttons 1-4, cycled with ←→).
+    const ALL: [Filter; 4] = [Filter::Day, Filter::Yesterday, Filter::Month, Filter::Year];
+
+    fn label(self) -> &'static str {
+        match self {
+            Filter::Day => "Day",
+            Filter::Yesterday => "Yesterday",
+            Filter::Month => "Month",
+            Filter::Year => "Year",
+            Filter::Custom => "Range",
+        }
+    }
+
+    /// The `:hint` a preset filter expands to (None for `Custom`).
+    fn hint(self) -> Option<&'static str> {
+        match self {
+            Filter::Day => Some("day"),
+            Filter::Yesterday => Some("yesterday"),
+            Filter::Month => Some("month"),
+            Filter::Year => Some("year"),
+            Filter::Custom => None,
+        }
+    }
+
+    fn cycle(self, delta: isize) -> Filter {
+        let n = Filter::ALL.len() as isize;
+        let Some(i) = Filter::ALL.iter().position(|f| *f == self) else {
+            // from a custom range, step onto the first/last preset
+            return if delta > 0 { Filter::ALL[0] } else { Filter::ALL[Filter::ALL.len() - 1] };
+        };
+        Filter::ALL[(i as isize + delta).rem_euclid(n) as usize]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Custom date range input
+// ---------------------------------------------------------------------------
+
+/// State of the open "date range" form.
+#[derive(Debug, Clone, Default)]
+struct RangeInput {
+    from: String,
+    to: String,
+    /// 0 = From, 1 = To.
+    field: usize,
+    error: Option<String>,
+}
+
+impl RangeInput {
+    fn active(&mut self) -> &mut String {
+        if self.field == 0 { &mut self.from } else { &mut self.to }
+    }
+
+    fn active_len(&self) -> usize {
+        if self.field == 0 { self.from.chars().count() } else { self.to.chars().count() }
+    }
+}
+
+/// Accept `YYYY-MM-DD`, `YYYY-MM-DD HH:MM[:SS]` and `YYYY-MM-DDTHH:MM[:SS]`
+/// and normalize to the `YYYY-MM-DD[THH:MM:SS]` form `parse_datetime` takes.
+fn normalize_datetime(input: &str) -> String {
+    let s = input.trim().replacen(' ', "T", 1);
+    match s.split_once('T') {
+        Some((date, time)) if time.len() == 5 => format!("{date}T{time}:00"),
+        _ => s,
+    }
+}
+
+/// Parse the form's From/To into a range. `To` given as a bare date is
+/// inclusive (the range ends at the following midnight); an empty `To`
+/// leaves the range open-ended. `From` may also be a `:hint` such as
+/// `:lastyear` or `:week` (then `To` must be empty).
+fn parse_range_input(from: &str, to: &str) -> Result<Range, String> {
+    let (from, to) = (from.trim(), to.trim());
+    if let Some(hint) = from.strip_prefix(':') {
+        if !to.is_empty() {
+            return Err("Leave 'To' empty when using a :hint.".into());
+        }
+        return expand_range_hint(hint).ok_or_else(|| format!("Unknown range hint ':{hint}'."));
+    }
+    if from.is_empty() {
+        return Err("Enter a start date (YYYY-MM-DD).".into());
+    }
+    let start = parse_datetime(&normalize_datetime(from))?;
+    if to.is_empty() {
+        return Ok(Range::new(start, 0));
+    }
+    let to_norm = normalize_datetime(to);
+    let mut end = parse_datetime(&to_norm)?;
+    if !to_norm.contains('T') {
+        // bare date: include the whole day
+        let tz = jiff::tz::TimeZone::system();
+        let day = jiff::Timestamp::from_second(end).unwrap().to_zoned(tz.clone()).date();
+        end = day.tomorrow().unwrap().to_zoned(tz).map_err(|e| e.to_string())?.timestamp().as_second();
+    }
+    if end <= start {
+        return Err("'To' must be after 'From'.".into());
+    }
+    Ok(Range::new(start, end))
+}
+
+// ---------------------------------------------------------------------------
+// App state
+// ---------------------------------------------------------------------------
+
+/// State of the open month list (`Shift+3`).
+struct MonthPicker {
+    year: i16,
+    state: ListState,
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+/// State of the open year list (`Shift+4`).
+struct YearPicker {
+    /// Selectable years, newest first.
+    years: Vec<i16>,
+    state: ListState,
+}
+
+/// Local-time range covering the calendar year `year`.
+fn year_range(year: i16) -> Range {
+    Range::new(month_range(year, 1).start, month_range(year, 12).end)
+}
+
+/// Local-time range covering month `m` (1-12) of `year`.
+fn month_range(year: i16, m: i8) -> Range {
+    let tz = jiff::tz::TimeZone::system();
+    let start = jiff::civil::date(year, m, 1);
+    let end = start.checked_add(jiff::Span::new().months(1)).unwrap();
+    let epoch = |d: jiff::civil::Date| d.to_zoned(tz.clone()).unwrap().timestamp().as_second();
+    Range::new(epoch(start), epoch(end))
+}
+
+/// A clickable button in the filter bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Button {
+    Range(Filter),
+    CustomRange,
+    Tag,
+}
+
+struct App {
+    db_root: PathBuf,
+    filter: Filter,
+    range: Range,
+    /// The range used by `Filter::Custom`, and the text it was entered as.
+    custom_range: Range,
+    custom_input: (String, String),
+    /// Open date-range form.
+    range_input: Option<RangeInput>,
+    /// Screen areas of the From/To fields from the last draw (for mouse clicks).
+    range_fields: [Rect; 2],
+    range_popup: Rect,
+    /// Only show intervals carrying this tag (None = all tags).
+    tag: Option<String>,
+    /// Every tag in the whole database with its interval count, sorted by name.
+    all_tags: Vec<(String, usize)>,
+    /// Open tag picker (entry 0 is "All tags", entry i+1 is `all_tags[i]`).
+    picker: Option<ListState>,
+    /// Screen area of the tag picker list from the last draw (for mouse clicks).
+    picker_area: Rect,
+    /// Month shown by `Filter::Month` (None = the current month).
+    month: Option<(i16, i8)>,
+    /// Open month picker.
+    month_picker: Option<MonthPicker>,
+    /// Year shown by `Filter::Year` (None = the current year).
+    year: Option<i16>,
+    /// Open year picker.
+    year_picker: Option<YearPicker>,
+    /// Screen area of the year picker list from the last draw.
+    year_picker_area: Rect,
+    /// Screen area of the month picker list from the last draw.
+    month_picker_area: Rect,
+    /// Intervals of the current range; `summary::Row::source` indexes this.
+    tracked: Vec<Tracked>,
+    summary: Summary,
+    error: Option<String>,
+    table: TableState,
+    /// Whether the bottom details panel is open (narrow layout only; the
+    /// side panel in the wide layout is always shown).
+    details: bool,
+    /// Whether the last draw used the wide (side-by-side) layout.
+    wide: bool,
+    /// Screen area of the summary table from the last draw (for mouse clicks).
+    table_area: Rect,
+    /// Screen areas of the filter buttons from the last draw (for mouse clicks).
+    buttons: Vec<(Rect, Button)>,
+    /// Number of data rows visible in the table at the last draw (page size).
+    page: usize,
+    quit: bool,
+}
+
+impl App {
+    fn new(db_root: PathBuf) -> Self {
+        let mut app = App {
+            db_root,
+            filter: Filter::Month,
+            range: Range::empty(),
+            custom_range: Range::empty(),
+            custom_input: (String::new(), String::new()),
+            range_input: None,
+            range_fields: [Rect::default(); 2],
+            range_popup: Rect::default(),
+            tag: None,
+            all_tags: Vec::new(),
+            picker: None,
+            picker_area: Rect::default(),
+            month: None,
+            month_picker: None,
+            year: None,
+            year_picker: None,
+            year_picker_area: Rect::default(),
+            month_picker_area: Rect::default(),
+            tracked: Vec::new(),
+            summary: Summary { rows: Vec::new(), grand_total: 0 },
+            error: None,
+            table: TableState::default(),
+            details: false,
+            wide: false,
+            table_area: Rect::default(),
+            buttons: Vec::new(),
+            page: 10,
+            quit: false,
+        };
+        app.load();
+        app
+    }
+
+    /// (Re)read the database for the current filter. Opens the database
+    /// fresh each time so external changes are picked up on reload.
+    fn load(&mut self) {
+        self.range = match (self.filter, self.month) {
+            (Filter::Month, Some((y, m))) => month_range(y, m),
+            (Filter::Year, _) if self.year.is_some() => year_range(self.year.unwrap()),
+            (f, _) => match f.hint() {
+                Some(hint) => expand_range_hint(hint).expect("built-in hint"),
+                None => self.custom_range,
+            },
+        };
+        let result = Database::open(self.db_root.join("data")).map_err(|e| e.to_string()).and_then(|mut db| {
+            let mut counts = std::collections::BTreeMap::<String, usize>::new();
+            for t in db.all_tracked()? {
+                for tag in t.interval.tags {
+                    *counts.entry(tag).or_default() += 1;
+                }
+            }
+            self.all_tags = counts.into_iter().collect();
+            let mut tracked = db.tracked_in_range(&self.range)?;
+            if let Some(tag) = &self.tag {
+                tracked.retain(|t| t.interval.has_tag(tag));
+            }
+            Ok(tracked)
+        });
+        match result {
+            Ok(tracked) => {
+                self.summary = summary::build(&self.range, &tracked);
+                self.tracked = tracked;
+                self.error = None;
+            }
+            Err(e) => {
+                self.tracked = Vec::new();
+                self.summary = Summary { rows: Vec::new(), grand_total: 0 };
+                self.error = Some(e);
+            }
+        }
+        self.table = TableState::default();
+        if !self.summary.rows.is_empty() {
+            self.table.select(Some(0));
+        } else {
+            self.details = false;
+        }
+    }
+
+    /// The interval behind the currently selected summary row.
+    fn selected(&self) -> Option<&Tracked> {
+        let row = self.summary.rows.get(self.table.selected()?)?;
+        self.tracked.get(row.source)
+    }
+
+    fn toggle_details(&mut self) {
+        if !self.wide {
+            self.details = !self.details && self.selected().is_some();
+        }
+    }
+
+    fn open_range_input(&mut self) {
+        let (from, to) = if self.filter == Filter::Custom {
+            self.custom_input.clone()
+        } else {
+            // prefill with the current range, end shown inclusive
+            let date = |e: i64| local_date(e);
+            (date(self.range.start), if self.range.is_ended() { date(self.range.end - 1) } else { String::new() })
+        };
+        self.range_input = Some(RangeInput { from, to, field: 0, error: None });
+    }
+
+    fn on_range_key(&mut self, key: KeyEvent) {
+        let Some(input) = &mut self.range_input else { return };
+        match key.code {
+            KeyCode::Esc => self.range_input = None,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => input.field = 1 - input.field,
+            KeyCode::Backspace => {
+                input.active().pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => input.active().clear(),
+            KeyCode::Char(c) => {
+                input.active().push(c);
+                input.error = None;
+            }
+            KeyCode::Enter => match parse_range_input(&input.from, &input.to) {
+                Ok(range) => {
+                    self.custom_input = (input.from.trim().to_string(), input.to.trim().to_string());
+                    self.custom_range = range;
+                    self.range_input = None;
+                    self.filter = Filter::Custom;
+                    self.load();
+                }
+                Err(e) => input.error = Some(e),
+            },
+            _ => {}
+        }
+    }
+
+    fn open_picker(&mut self) {
+        let current = self
+            .tag
+            .as_ref()
+            .and_then(|t| self.all_tags.iter().position(|(name, _)| name == t))
+            .map_or(0, |i| i + 1);
+        self.picker = Some(ListState::default().with_selected(Some(current)));
+    }
+
+    /// Apply picker entry `i` (0 = all tags) and close the picker.
+    fn pick(&mut self, i: usize) {
+        self.picker = None;
+        let tag = i.checked_sub(1).and_then(|i| self.all_tags.get(i)).map(|(t, _)| t.clone());
+        if tag != self.tag {
+            self.tag = tag;
+            self.load();
+        }
+    }
+
+    fn picker_move(&mut self, delta: isize) {
+        let len = self.all_tags.len() as isize + 1;
+        if let Some(state) = &mut self.picker {
+            let cur = state.selected().unwrap_or(0) as isize;
+            state.select(Some((cur + delta).clamp(0, len - 1) as usize));
+        }
+    }
+
+    fn on_picker_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('t') | KeyCode::Char('6') => self.picker = None,
+            KeyCode::Down | KeyCode::Char('j') => self.picker_move(1),
+            KeyCode::Up | KeyCode::Char('k') => self.picker_move(-1),
+            KeyCode::PageDown => self.picker_move(10),
+            KeyCode::PageUp => self.picker_move(-10),
+            KeyCode::Home | KeyCode::Char('g') => self.picker_move(isize::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => self.picker_move(isize::MAX / 2),
+            KeyCode::Backspace => self.pick(0), // clear the tag filter
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let i = self.picker.as_ref().and_then(ListState::selected).unwrap_or(0);
+                self.pick(i);
+            }
+            _ => {}
+        }
+    }
+
+    fn set_filter(&mut self, filter: Filter) {
+        // choosing Month/Year directly always means the current month/year
+        if filter != self.filter
+            || (filter == Filter::Month && self.month.is_some())
+            || (filter == Filter::Year && self.year.is_some())
+        {
+            self.filter = filter;
+            self.month = None;
+            self.year = None;
+            self.load();
+        }
+    }
+
+    /// Open the list of the last 5 years (current year first).
+    fn open_year_picker(&mut self) {
+        let this_year = jiff::Zoned::now().year();
+        let years: Vec<i16> = (0..5).map(|i| this_year - i).collect();
+        let shown = jiff::Timestamp::from_second(self.range.start).unwrap().to_zoned(jiff::tz::TimeZone::system()).year();
+        let selected = years.iter().position(|y| *y == shown).unwrap_or(0);
+        self.year_picker = Some(YearPicker { years, state: ListState::default().with_selected(Some(selected)) });
+    }
+
+    fn pick_year(&mut self, i: usize) {
+        if let Some(p) = self.year_picker.take() {
+            self.filter = Filter::Year;
+            self.month = None;
+            self.year = p.years.get(i).copied();
+            self.load();
+        }
+    }
+
+    fn on_year_picker_key(&mut self, key: KeyEvent) {
+        let Some(p) = &mut self.year_picker else { return };
+        let last = p.years.len() as isize - 1;
+        let cur = p.state.selected().unwrap_or(0) as isize;
+        let mut go = |d: isize| p.state.select(Some((cur + d).clamp(0, last) as usize));
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.year_picker = None,
+            KeyCode::Down | KeyCode::Char('j') => go(1),
+            KeyCode::Up | KeyCode::Char('k') => go(-1),
+            KeyCode::Home | KeyCode::Char('g') => go(-last - 1),
+            KeyCode::End | KeyCode::Char('G') => go(last + 1),
+            KeyCode::Enter | KeyCode::Char(' ') => self.pick_year(cur as usize),
+            // like pressing 4: back to the current year
+            KeyCode::Backspace => {
+                self.year_picker = None;
+                self.set_filter(Filter::Year);
+            }
+            _ => {}
+        }
+    }
+
+    /// Open the month list for the year currently shown.
+    fn open_month_picker(&mut self) {
+        let shown = jiff::Timestamp::from_second(self.range.start).unwrap().to_zoned(jiff::tz::TimeZone::system());
+        let year = shown.year();
+        let selected = shown.month() as usize - 1;
+        self.month_picker = Some(MonthPicker { year, state: ListState::default().with_selected(Some(selected)) });
+    }
+
+    fn month_picker_year(&mut self, delta: i16) {
+        if let Some(p) = &mut self.month_picker {
+            p.year += delta;
+        }
+    }
+
+    fn pick_month(&mut self, m: usize) {
+        if let Some(p) = self.month_picker.take() {
+            self.filter = Filter::Month;
+            self.month = Some((p.year, m as i8 + 1));
+            self.load();
+        }
+    }
+
+    fn on_month_picker_key(&mut self, key: KeyEvent) {
+        let Some(p) = &mut self.month_picker else { return };
+        let cur = p.state.selected().unwrap_or(0) as isize;
+        let mut go = |d: isize| p.state.select(Some((cur + d).clamp(0, 11) as usize));
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.month_picker = None,
+            KeyCode::Down | KeyCode::Char('j') => go(1),
+            KeyCode::Up | KeyCode::Char('k') => go(-1),
+            KeyCode::Home | KeyCode::Char('g') => go(-12),
+            KeyCode::End | KeyCode::Char('G') => go(12),
+            KeyCode::Left | KeyCode::Char('h') => self.month_picker_year(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.month_picker_year(1),
+            KeyCode::Enter | KeyCode::Char(' ') => self.pick_month(cur as usize),
+            // like pressing 3: back to the current month
+            KeyCode::Backspace => {
+                self.month_picker = None;
+                self.set_filter(Filter::Month);
+            }
+            _ => {}
+        }
+    }
+
+    fn scroll_by(&mut self, delta: isize) {
+        let len = self.summary.rows.len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.table.selected().unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, len as isize - 1) as usize;
+        self.table.select(Some(next));
+    }
+
+    fn on_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.quit = true;
+            return;
+        }
+        if self.picker.is_some() {
+            return self.on_picker_key(key);
+        }
+        if self.month_picker.is_some() {
+            return self.on_month_picker_key(key);
+        }
+        if self.year_picker.is_some() {
+            return self.on_year_picker_key(key);
+        }
+        if self.range_input.is_some() {
+            return self.on_range_key(key);
+        }
+        let page = self.page.max(1) as isize;
+        match key.code {
+            KeyCode::Esc if self.details && !self.wide => self.details = false,
+            KeyCode::Enter | KeyCode::Char('i') => self.toggle_details(),
+            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_by(page),
+            KeyCode::PageUp => self.scroll_by(-page),
+            KeyCode::Home | KeyCode::Char('g') => self.scroll_by(isize::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => self.scroll_by(isize::MAX / 2),
+            KeyCode::Char('1') | KeyCode::Char('d') => self.set_filter(Filter::Day),
+            KeyCode::Char('2') | KeyCode::Char('y') => self.set_filter(Filter::Yesterday),
+            // Shift+3: '§' on German, '#' on US layouts (or '3' + SHIFT where reported)
+            KeyCode::Char('§') | KeyCode::Char('#') | KeyCode::Char('M') => self.open_month_picker(),
+            KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::SHIFT) => self.open_month_picker(),
+            KeyCode::Char('3') | KeyCode::Char('m') => self.set_filter(Filter::Month),
+            // Shift+4: '$' on German and US layouts (or '4' + SHIFT where reported)
+            KeyCode::Char('$') => self.open_year_picker(),
+            KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::SHIFT) => self.open_year_picker(),
+            KeyCode::Char('4') | KeyCode::Char('Y') => self.set_filter(Filter::Year),
+            KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => self.set_filter(self.filter.cycle(1)),
+            KeyCode::Left | KeyCode::BackTab | KeyCode::Char('h') => self.set_filter(self.filter.cycle(-1)),
+            KeyCode::Char('5') | KeyCode::Char('c') => self.open_range_input(),
+            KeyCode::Char('6') | KeyCode::Char('t') => self.open_picker(),
+            KeyCode::Char('r') => self.load(),
+            _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, mouse: MouseEvent) {
+        let pos = Position::new(mouse.column, mouse.row);
+        if self.picker.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.picker_move(1),
+                MouseEventKind::ScrollUp => self.picker_move(-1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let a = self.picker_area;
+                    if a.contains(pos) {
+                        let offset = self.picker.as_ref().map_or(0, ListState::offset);
+                        let i = offset + (pos.y - a.y) as usize;
+                        if i <= self.all_tags.len() {
+                            self.pick(i);
+                        }
+                    } else {
+                        self.picker = None; // click outside closes
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(p) = &mut self.year_picker {
+            let last = p.years.len() - 1;
+            match mouse.kind {
+                MouseEventKind::ScrollDown => p.state.select(Some((p.state.selected().unwrap_or(0) + 1).min(last))),
+                MouseEventKind::ScrollUp => p.state.select(Some(p.state.selected().unwrap_or(0).saturating_sub(1))),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let a = self.year_picker_area;
+                    if a.contains(pos) {
+                        let i = p.state.offset() + (pos.y - a.y) as usize;
+                        if i <= last {
+                            self.pick_year(i);
+                        }
+                    } else {
+                        self.year_picker = None;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(p) = &mut self.month_picker {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => p.state.select(Some((p.state.selected().unwrap_or(0) + 1).min(11))),
+                MouseEventKind::ScrollUp => p.state.select(Some(p.state.selected().unwrap_or(0).saturating_sub(1))),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let a = self.month_picker_area;
+                    if a.contains(pos) {
+                        let i = p.state.offset() + (pos.y - a.y) as usize;
+                        if i < 12 {
+                            self.pick_month(i);
+                        }
+                    } else {
+                        self.month_picker = None;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(input) = &mut self.range_input {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                match self.range_fields.iter().position(|r| r.contains(pos)) {
+                    Some(i) => input.field = i,
+                    None if !self.range_popup.contains(pos) => self.range_input = None,
+                    None => {}
+                }
+            }
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollDown => self.scroll_by(3),
+            MouseEventKind::ScrollUp => self.scroll_by(-3),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some((_, b)) = self.buttons.iter().find(|(r, _)| r.contains(pos)) {
+                    match b.clone() {
+                        Button::Range(f) => self.set_filter(f),
+                        Button::Tag => self.open_picker(),
+                        Button::CustomRange => self.open_range_input(),
+                    }
+                } else if let Some(i) = self.row_at(pos) {
+                    // first click selects, clicking the selected row toggles details
+                    if self.table.selected() == Some(i) {
+                        self.toggle_details();
+                    } else {
+                        self.table.select(Some(i));
+                    }
+                }
+            }
+            // right-click on the Month/Year button opens the month/year list
+            MouseEventKind::Down(MouseButton::Right) => {
+                match self.buttons.iter().find(|(r, _)| r.contains(pos)).map(|(_, b)| b) {
+                    Some(Button::Range(Filter::Month)) => self.open_month_picker(),
+                    Some(Button::Range(Filter::Year)) => self.open_year_picker(),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Summary row index under a screen position, if any.
+    fn row_at(&self, pos: Position) -> Option<usize> {
+        let a = self.table_area;
+        // border + top padding + header row above the first data row
+        let first = a.y + 1 + PAD.top + 1;
+        if pos.x <= a.x || pos.x + 1 >= a.right() || pos.y < first || pos.y + 1 >= a.bottom() {
+            return None;
+        }
+        let i = self.table.offset() + (pos.y - first) as usize;
+        (i < self.summary.rows.len()).then_some(i)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+
+const ACCENT: Color = Color::Cyan;
+/// Wk/Date/Day colors, alternating from one ISO week to the next.
+const WEEK_COLORS: [Color; 2] = [Color::Cyan, Color::Magenta];
+
+/// For each summary row, 0 or 1: flips whenever the ISO week (week-year +
+/// week number) of the row's day changes, so consecutive weeks alternate.
+/// Rows without a date belong to the day (and week) of the row above.
+fn week_parity(rows: &[summary::Row]) -> Vec<usize> {
+    let mut parity = 0;
+    let mut current: Option<(i16, i8)> = None;
+    rows.iter()
+        .map(|r| {
+            let week = r.date.as_deref().and_then(|d| d.parse::<jiff::civil::Date>().ok()).map(|d| {
+                let iso = d.iso_week_date();
+                (iso.year(), iso.week())
+            });
+            if let Some(week) = week {
+                if current.is_some_and(|c| c != week) {
+                    parity = 1 - parity;
+                }
+                current = Some(week);
+            }
+            parity
+        })
+        .collect()
+}
+
+fn draw(frame: &mut Frame, app: &mut App) {
+    let [header, filters, body, status, help] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+
+    draw_header(frame, header, app);
+    draw_filters(frame, filters, app);
+    let table_w = table_width(&app.summary);
+    app.wide = body.width >= table_w + DETAILS_MIN_WIDTH;
+    let has_selection = app.selected().is_some();
+    if app.wide && has_selection {
+        // wide: table at its natural width, details always shown on the right
+        let [table, details] = Layout::horizontal([Constraint::Length(table_w), Constraint::Min(DETAILS_MIN_WIDTH)]).areas(body);
+        draw_summary(frame, table, app);
+        draw_details(frame, details, app);
+    } else if !app.wide && app.details && has_selection {
+        // narrow: details below the table, only after Enter
+        let [table, details] = Layout::vertical([Constraint::Min(5), Constraint::Length(DETAILS_HEIGHT)]).areas(body);
+        draw_summary(frame, table, app);
+        draw_details(frame, details, app);
+    } else {
+        draw_summary(frame, body, app);
+    }
+    draw_status(frame, status, app);
+    draw_help(frame, help, app.wide);
+    draw_picker(frame, body, app);
+    draw_range_input(frame, body, app);
+    draw_month_picker(frame, body, app);
+    draw_year_picker(frame, body, app);
+}
+
+fn draw_year_picker(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(p) = &mut app.year_picker else { return };
+    let shown = (app.filter == Filter::Year).then(|| app.year.unwrap_or_else(|| jiff::Zoned::now().year()));
+    let items: Vec<ListItem> = p
+        .years
+        .iter()
+        .map(|year| {
+            let style = if shown == Some(*year) { Style::new().fg(ACCENT).bold() } else { Style::new() };
+            ListItem::new(Line::styled(year.to_string(), style))
+        })
+        .collect();
+
+    let footer = " Enter select · ⌫ current · Esc ";
+    let w = (footer.chars().count() as u16 + 4).min(area.width);
+    let h = (items.len() as u16 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Year ")
+        .title_bottom(Line::from(footer).right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    app.year_picker_area = block.inner(popup);
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("▸ ")
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(list, popup, &mut p.state);
+}
+
+fn draw_month_picker(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(p) = &mut app.month_picker else { return };
+    let shown = match (app.filter, app.month) {
+        (Filter::Month, Some(m)) => Some(m),
+        (Filter::Month, None) => {
+            let now = jiff::Zoned::now();
+            Some((now.year(), now.month()))
+        }
+        _ => None,
+    };
+    let items: Vec<ListItem> = MONTH_NAMES
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let current = shown == Some((p.year, i as i8 + 1));
+            let style = if current { Style::new().fg(ACCENT).bold() } else { Style::new() };
+            ListItem::new(Line::styled(*name, style))
+        })
+        .collect();
+
+    let footer = " Enter select · ←→ year · ⌫ current · Esc ";
+    let w = (footer.chars().count() as u16 + 4).min(area.width);
+    let h = (12 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let title = Line::from(vec![
+        Span::raw(" ◂ "),
+        Span::styled(p.year.to_string(), Style::new().fg(ACCENT).bold()),
+        Span::raw(" ▸ "),
+    ]);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(title)
+        .title_bottom(Line::from(footer).right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    app.month_picker_area = block.inner(popup);
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("▸ ")
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(list, popup, &mut p.state);
+}
+
+/// Inner spacing between a view's frame and its content.
+const PAD: Padding = Padding::new(2, 2, 1, 0);
+/// Height of the bottom details panel: 10 content lines + borders + padding.
+const DETAILS_HEIGHT: u16 = 10 + 2 + PAD.top + PAD.bottom;
+/// Minimum width of the side details panel; below that the narrow layout is used.
+const DETAILS_MIN_WIDTH: u16 = 44;
+
+// ID and Annotation are deliberately not shown in the TUI table.
+const HEADERS: [&str; 8] = ["Wk", "Date", "Day", "Tags", "Start", "End", "Time", "Total"];
+const RIGHT: [bool; 8] = [false, false, false, false, true, true, true, true];
+
+fn cells_of(r: &summary::Row) -> [String; 8] {
+    [
+        r.week.clone().unwrap_or_default(),
+        r.date.clone().unwrap_or_default(),
+        r.day_name.clone().unwrap_or_default(),
+        r.tags.clone(),
+        r.start.clone(),
+        r.end.clone(),
+        r.time.clone(),
+        r.total.clone(),
+    ]
+}
+
+/// Content-driven width of each table column (max of header and cells).
+fn column_widths(summary: &Summary) -> [usize; 8] {
+    let mut widths: [usize; 8] = HEADERS.map(str::len);
+    for row in &summary.rows {
+        for (w, c) in widths.iter_mut().zip(cells_of(row)) {
+            *w = (*w).max(c.chars().count());
+        }
+    }
+    widths
+}
+
+/// Width the summary table needs: columns + spacing + borders + scrollbar gap.
+fn table_width(summary: &Summary) -> u16 {
+    let cols: usize = column_widths(summary).iter().sum();
+    (cols + HEADERS.len() - 1 + 2) as u16 + PAD.left + PAD.right
+}
+
+fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(t) = app.selected() else { return };
+    let iv = &t.interval;
+    let now = jiff::Timestamp::now().as_second();
+    // day and ISO week of the entry's start, in local time
+    let start_day = jiff::Timestamp::from_second(iv.range.start).unwrap().to_zoned(jiff::tz::TimeZone::system()).date();
+    let label = |s: &'static str| Span::styled(format!("{s:<11}"), Style::new().fg(ACCENT).bold());
+
+    let tags: Vec<Span> = if iv.tags.is_empty() {
+        vec![Span::styled("(none)", Style::new().dim())]
+    } else {
+        iv.tags
+            .iter()
+            .flat_map(|t| [Span::styled(format!(" {t} "), Style::new().fg(Color::Black).bg(ACCENT)), Span::raw(" ")])
+            .collect()
+    };
+    let end = if iv.is_open() {
+        Span::styled("still tracking", Style::new().fg(Color::Green).italic())
+    } else {
+        Span::raw(local_datetime(iv.range.end))
+    };
+    let days = app.summary.rows.iter().filter(|r| r.source == app.summary.rows[app.table.selected().unwrap()].source).count();
+
+    let mut lines = vec![
+        Line::from(vec![label("ID"), Span::raw(format!("@{}", t.id))]),
+        Line::from([vec![label("Tags")], tags].concat()),
+        Line::from(vec![
+            label("Annotation"),
+            match &iv.annotation {
+                Some(a) if !a.is_empty() => Span::raw(a.clone()),
+                _ => Span::styled("(none)", Style::new().dim()),
+            },
+        ]),
+        Line::raw(""),
+        Line::from(vec![label("Day"), Span::raw(start_day.strftime("%A").to_string())]),
+        Line::from(vec![
+            label("Week"),
+            Span::raw(format!("W{:02} {}", start_day.iso_week_date().week(), start_day.iso_week_date().year())),
+        ]),
+        Line::from(vec![label("Start"), Span::raw(local_datetime(iv.range.start))]),
+        Line::from(vec![label("End"), end]),
+        Line::from(vec![
+            label("Duration"),
+            Span::styled(summary::format_hours(iv.range.total(now)), Style::new().fg(Color::Yellow).bold()),
+        ]),
+    ];
+    if days > 1 {
+        lines.push(Line::from(vec![label("Spans"), Span::raw(format!("{days} days"))]));
+    }
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Entry details ")
+        .title_bottom(if app.wide { Line::raw("") } else { Line::from(" ↑↓ next/prev · Enter/Esc close ").right_aligned().dim() });
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block.padding(PAD)),
+        area,
+    );
+}
+
+/// "2026-11-12 Thu 08:00:00" in local time.
+fn local_datetime(epoch: i64) -> String {
+    let z = jiff::Timestamp::from_second(epoch).unwrap().to_zoned(jiff::tz::TimeZone::system());
+    z.strftime("%Y-%m-%d %a %H:%M:%S").to_string()
+}
+
+fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
+    let line = Line::from(vec![
+        Span::styled(" timew-tui ", Style::new().fg(Color::Black).bg(ACCENT).bold()),
+        Span::raw("  "),
+        Span::styled(app.db_root.display().to_string(), Style::new().dim()),
+        Span::styled("  (read-only)", Style::new().dim().italic()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_filters(frame: &mut Frame, area: Rect, app: &mut App) {
+    app.buttons.clear();
+    let mut buttons: Vec<(String, bool, Button)> = Filter::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let label = match (f, app.month, app.year) {
+                (Filter::Month, Some((y, m)), _) if app.filter == Filter::Month => {
+                    format!(" {} {y}-{m:02} ▾ ", i + 1)
+                }
+                (Filter::Year, _, Some(y)) if app.filter == Filter::Year => format!(" {} {y} ▾ ", i + 1),
+                _ => format!(" {} {} ", i + 1, f.label()),
+            };
+            (label, *f == app.filter, Button::Range(*f))
+        })
+        .collect();
+    let custom_label = if app.filter == Filter::Custom {
+        format!(" 5 {} ▾ ", range_label(&app.range))
+    } else {
+        " 5 Range… ".to_string()
+    };
+    buttons.push((custom_label, app.filter == Filter::Custom || app.range_input.is_some(), Button::CustomRange));
+    let tag_label = match &app.tag {
+        Some(t) => format!(" 6 Tag: {t} ▾ "),
+        None => " 6 Tag: all ▾ ".to_string(),
+    };
+    buttons.push((tag_label, app.tag.is_some() || app.picker.is_some(), Button::Tag));
+
+    let mut x = area.x;
+    for (text, active, button) in buttons {
+        if button == Button::Tag {
+            x += 2; // visually separate the tag filter from the range filters
+        }
+        let w = text.chars().count() as u16 + 2;
+        if x + w > area.right() {
+            break;
+        }
+        let rect = Rect::new(x, area.y, w, area.height);
+        let (border, label) = if active {
+            (Style::new().fg(ACCENT), Style::new().fg(Color::Black).bg(ACCENT).bold())
+        } else {
+            (Style::new().dim(), Style::new())
+        };
+        let widget = Paragraph::new(Line::from(text).style(label))
+            .alignment(Alignment::Center)
+            .block(Block::bordered().border_type(BorderType::Rounded).border_style(border));
+        frame.render_widget(widget, rect);
+        app.buttons.push((rect, button));
+        x += w + 1;
+    }
+}
+
+fn draw_range_input(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(input) = &app.range_input else { return };
+    const FIELD_W: u16 = 22;
+    let label = |s: &'static str| Span::styled(format!("{s:<6}"), Style::new().fg(ACCENT).bold());
+    let field = |text: &str, active: bool| {
+        let style = if active { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
+        Span::styled(format!(" {:<w$}", text, w = FIELD_W as usize - 1), style)
+    };
+    let hint = Style::new().dim();
+    let mut lines = vec![
+        Line::from(vec![label("From"), field(&input.from, input.field == 0)]),
+        Line::raw(""),
+        Line::from(vec![label("To"), field(&input.to, input.field == 1)]),
+        Line::raw(""),
+        Line::styled("YYYY-MM-DD or YYYY-MM-DD HH:MM", hint),
+        Line::styled("'To' is inclusive; leave empty for open end", hint),
+        Line::styled("'From' may be a hint, e.g. :lastyear", hint),
+    ];
+    if let Some(err) = &input.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(err.clone(), Style::new().fg(Color::Red).bold()));
+    }
+
+    let w = (46 + PAD.left + PAD.right + 2).min(area.width);
+    let h = (lines.len() as u16 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Date range ")
+        .title_bottom(Line::from(" Enter apply · Tab switch · Esc cancel ").right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    let inner = block.inner(popup);
+    let field_x = inner.x + 6;
+    app.range_fields = [Rect::new(field_x, inner.y, FIELD_W, 1), Rect::new(field_x, inner.y + 2, FIELD_W, 1)];
+    app.range_popup = popup;
+
+    let active = app.range_fields[input.field];
+    let cursor_x = active.x + 1 + input.active_len() as u16;
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
+    frame.set_cursor_position(Position::new(cursor_x.min(active.right() - 1), active.y));
+}
+
+fn draw_picker(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(state) = &mut app.picker else { return };
+    let name_w = app.all_tags.iter().map(|(t, _)| t.chars().count()).max().unwrap_or(0).max(8);
+    let count_w = app.all_tags.iter().map(|(_, c)| c.to_string().len()).max().unwrap_or(1);
+    let total: usize = app.all_tags.iter().map(|(_, c)| c).sum();
+
+    let mut items = vec![ListItem::new(Line::from(vec![
+        Span::styled(format!("{:<name_w$}", "All tags"), Style::new().italic()),
+        Span::styled(format!("  {:>count_w$}", total), Style::new().dim()),
+    ]))];
+    for (tag, count) in &app.all_tags {
+        let current = app.tag.as_deref() == Some(tag.as_str());
+        let marker = if current { Style::new().fg(ACCENT).bold() } else { Style::new() };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(format!("{tag:<name_w$}"), marker),
+            Span::styled(format!("  {count:>count_w$}"), Style::new().dim()),
+        ])));
+    }
+
+    let content_w = (name_w + 2 + count_w + 2) as u16; // + highlight symbol
+    let w = (content_w + 2 + PAD.left + PAD.right).max(30).min(area.width);
+    let h = (items.len() as u16 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Filter by tag ")
+        .title_bottom(Line::from(" Enter select · ⌫ clear · Esc cancel ").right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    app.picker_area = block.inner(popup);
+    let list = List::new(items)
+        .block(block)
+        .highlight_symbol("▸ ")
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(list, popup, state);
+}
+
+fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
+    let title = Line::from(vec![
+        Span::raw(" Summary · "),
+        Span::styled(app.filter.label(), Style::new().fg(ACCENT).bold()),
+        Span::raw(format!(" · {} ", range_label(&app.range))),
+    ]);
+    let title = match &app.tag {
+        Some(tag) => {
+            let mut spans = title.spans;
+            spans.extend([Span::raw("· tag "), Span::styled(tag.clone(), Style::new().fg(ACCENT).bold()), Span::raw(" ")]);
+            Line::from(spans)
+        }
+        None => title,
+    };
+    let block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).padding(PAD);
+
+    if let Some(err) = &app.error {
+        let p = Paragraph::new(format!("Error reading database:\n{err}")).fg(Color::Red).block(block);
+        frame.render_widget(p, area);
+        return;
+    }
+    if app.summary.rows.is_empty() {
+        let tagged = app.tag.as_ref().map(|t| format!(" tagged with {t}")).unwrap_or_default();
+        let p = Paragraph::new(format!("\nNo data found in the range {}{tagged}.", range_label(&app.range)))
+            .alignment(Alignment::Center)
+            .dim()
+            .block(block);
+        frame.render_widget(p, area);
+        return;
+    }
+
+    let all: Vec<[String; 8]> = app.summary.rows.iter().map(cells_of).collect();
+    let widths = column_widths(&app.summary);
+
+    let align = |s: String, right: bool| {
+        let line = Line::from(s);
+        if right { line.alignment(Alignment::Right) } else { line }
+    };
+
+    let header = Row::new(HEADERS.iter().zip(RIGHT).map(|(h, r)| Cell::from(align(h.to_string(), r))))
+        .style(Style::new().bold().underlined());
+
+    let weeks = week_parity(&app.summary.rows);
+    let mut day_index = 0usize;
+    let rows = all.into_iter().enumerate().map(|(i, cells)| {
+        if i > 0 && app.summary.rows[i].date.is_some() {
+            day_index += 1;
+        }
+        let stripe = if day_index % 2 == 1 { Style::new().bg(Color::Indexed(235)) } else { Style::new() };
+        let cells = cells.into_iter().enumerate().map(|(c, s)| {
+            let style = match c {
+                0..=2 => Style::new().fg(WEEK_COLORS[weeks[i]]).bold(),
+                7 => Style::new().fg(Color::Yellow).bold(),
+                _ => Style::new(),
+            };
+            Cell::from(align(s, RIGHT[c])).style(style)
+        });
+        Row::new(cells).style(stripe)
+    });
+
+    let constraints = widths.map(|w| Constraint::Length(w as u16));
+    let table = Table::new(rows, constraints)
+        .header(header)
+        .column_spacing(1)
+        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .block(block);
+
+    // inner height minus borders, padding and the header row
+    app.page = area.height.saturating_sub(2 + PAD.top + PAD.bottom + 1) as usize;
+    app.table_area = area;
+    frame.render_stateful_widget(table, area, &mut app.table);
+
+    if app.summary.rows.len() <= app.page {
+        return;
+    }
+    let mut sb = ScrollbarState::new(app.summary.rows.len()).position(app.table.selected().unwrap_or(0));
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None),
+        area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+        &mut sb,
+    );
+}
+
+fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+    let days = app.summary.rows.iter().filter(|r| r.date.is_some()).count();
+    let intervals = app.summary.rows.len();
+    let total = app.summary.grand_total;
+    let avg = if days > 0 { summary::format_hours(total / days as i64) } else { "-".into() };
+    let pos = match app.table.selected() {
+        Some(i) if intervals > 0 => format!("row {}/{}", i + 1, intervals),
+        _ => String::new(),
+    };
+    let line = Line::from(vec![
+        Span::raw(" Total "),
+        Span::styled(summary::format_hours(total), Style::new().fg(Color::Yellow).bold()),
+        Span::raw(format!(
+            "  ·  {days} {}  ·  {intervals} {}  ·  avg/day ",
+            if days == 1 { "day" } else { "days" },
+            if intervals == 1 { "interval" } else { "intervals" },
+        )),
+        Span::styled(avg, Style::new().bold()),
+        Span::raw("  ·  "),
+        Span::styled(pos, Style::new().dim()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_help(frame: &mut Frame, area: Rect, wide: bool) {
+    let key = |k: &'static str| Span::styled(k, Style::new().fg(ACCENT).bold());
+    let mut spans = vec![
+        Span::raw(" "),
+        key("↑↓"),
+        Span::raw(" move  "),
+        key("PgUp/Dn"),
+        Span::raw(" page  "),
+
+        key("1-4"),
+        Span::raw(" range  "),
+        key("⇧3/⇧4"),
+        Span::raw(" pick  "),
+        key("c"),
+        Span::raw(" custom  "),
+        key("t"),
+        Span::raw(" tag  "),
+    ];
+    if !wide {
+        spans.extend([key("Enter"), Span::raw(" details  ")]);
+    }
+    spans.extend([
+        key("r"),
+        Span::raw(" reload  "),
+        key("q"),
+        Span::raw(" quit"),
+    ]);
+    let line = Line::from(spans).dim();
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+/// Local calendar date of an epoch, as `YYYY-MM-DD`.
+fn local_date(epoch: i64) -> String {
+    jiff::Timestamp::from_second(epoch).unwrap().to_zoned(jiff::tz::TimeZone::system()).date().to_string()
+}
+
+/// Local `YYYY-MM-DD`, plus ` HH:MM` when the epoch is not at midnight.
+fn local_moment(epoch: i64) -> String {
+    let z = jiff::Timestamp::from_second(epoch).unwrap().to_zoned(jiff::tz::TimeZone::system());
+    if (z.hour(), z.minute(), z.second()) == (0, 0, 0) {
+        z.date().to_string()
+    } else {
+        z.strftime("%Y-%m-%d %H:%M").to_string()
+    }
+}
+
+/// "2026-11-01 – 2026-11-30" (end is exclusive internally, shown inclusive
+/// for whole days), "since 2026-11-01" for an open-ended range.
+fn range_label(range: &Range) -> String {
+    if !range.is_ended() {
+        return format!("since {}", local_moment(range.start));
+    }
+    let start = local_moment(range.start);
+    let end_is_midnight = local_moment(range.end).len() == 10;
+    let end = if end_is_midnight && start.len() == 10 { local_date(range.end - 1) } else { local_moment(range.end) };
+    if start == end { start } else { format!("{start} – {end}") }
+}
+
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+
+fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
+    while !app.quit {
+        terminal.draw(|f| draw(f, &mut app))?;
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
+            Event::Mouse(mouse) => app.on_mouse(mouse),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn main() -> std::process::ExitCode {
+    let db_root = match resolve_db_root() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    if !db_root.join("data").is_dir() {
+        eprintln!("No Timewarrior database found at {} (missing data/ directory).", db_root.display());
+        return std::process::ExitCode::FAILURE;
+    }
+
+    let app = App::new(db_root);
+    let mut terminal = ratatui::init();
+    let _ = execute!(io::stdout(), EnableMouseCapture);
+    let result = run(&mut terminal, app);
+    let _ = execute!(io::stdout(), DisableMouseCapture);
+    ratatui::restore();
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::KeyEventState;
+    use std::fs;
+
+    /// A throwaway database with two intervals today and one yesterday.
+    fn sample_db(name: &str) -> PathBuf {
+        let root = env::temp_dir().join(format!("timew-tui-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data")).unwrap();
+        let tz = jiff::tz::TimeZone::system();
+        let today = jiff::Zoned::now().date();
+        let at = |d: jiff::civil::Date, h: i8| {
+            let ts = d.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp();
+            timew_rs::interval::format_iso(ts.as_second())
+        };
+        let yesterday = today.yesterday().unwrap();
+        let mut lines = vec![
+            (yesterday, format!("inc {} - {} # planning", at(yesterday, 8), at(yesterday, 12))),
+            (today, format!("inc {} - {} # meetings", at(today, 8), at(today, 10))),
+            (today, format!("inc {} - {} # email", at(today, 10), at(today, 11))),
+        ];
+        lines.sort();
+        for (d, line) in lines {
+            let file = root.join("data").join(format!("{:04}-{:02}.data", d.year(), d.month()));
+            let mut content = fs::read_to_string(&file).unwrap_or_default();
+            content.push_str(&line);
+            content.push('\n');
+            fs::write(file, content).unwrap();
+        }
+        root
+    }
+
+    fn render(app: &mut App) -> String {
+        render_at(app, 100, 24)
+    }
+
+    fn render_at(app: &mut App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.on_key(KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+    }
+
+    #[test]
+    fn filters_switch_the_summary() {
+        let root = sample_db("filters");
+        let mut app = App::new(root.clone());
+        assert_eq!(app.filter, Filter::Month, "month is the default filter");
+        let month = render(&mut app);
+        println!("{month}");
+        assert!(month.contains("Summary · Month"));
+        assert!(!month.contains("Annotation") && !month.contains("@1"), "ID/Annotation are hidden");
+
+        press(&mut app, '1');
+        let day = render(&mut app);
+        println!("{day}");
+        assert!(day.contains("meetings") && day.contains("email") && !day.contains("planning"));
+        assert!(day.contains("Total 3:00:00"));
+
+        press(&mut app, '2');
+        let yday = render(&mut app);
+        assert!(yday.contains("planning") && !yday.contains("meetings"));
+        assert!(yday.contains("Total 4:00:00"));
+
+        press(&mut app, '4');
+        assert!(render(&mut app).contains("Total 7:00:00"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mouse_click_on_button_selects_filter() {
+        let root = sample_db("mouse");
+        let mut app = App::new(root.clone());
+        render(&mut app);
+        let (rect, f) = app.buttons[0].clone();
+        assert_eq!(f, Button::Range(Filter::Day));
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 2,
+            row: rect.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.filter, Filter::Day);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scrolling_is_clamped() {
+        let root = sample_db("scroll");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        press(&mut app, 'G');
+        assert_eq!(app.table.selected(), Some(2));
+        press(&mut app, 'j');
+        assert_eq!(app.table.selected(), Some(2));
+        press(&mut app, 'g');
+        assert_eq!(app.table.selected(), Some(0));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.on_key(KeyEvent { code, modifiers: KeyModifiers::NONE, kind: KeyEventKind::Press, state: KeyEventState::NONE });
+    }
+
+    #[test]
+    fn details_popup_follows_selection() {
+        let root = sample_db("details");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        key(&mut app, KeyCode::Enter);
+        assert!(app.details);
+        let first = render(&mut app);
+        println!("{first}");
+        assert!(first.contains("Entry details") && first.contains("planning") && first.contains("4:00:00"));
+        assert!(first.contains("@3"));
+        let start = jiff::Zoned::now().date().yesterday().unwrap();
+        assert!(first.contains(&start.strftime("%A").to_string()), "weekday shown");
+        assert!(first.contains(&format!("W{:02} {}", start.iso_week_date().week(), start.iso_week_date().year())), "week shown");
+
+        press(&mut app, 'j');
+        let second = render(&mut app);
+        assert!(second.contains("@2") && second.contains("2:00:00"));
+
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.details && !app.quit, "Esc closes the details first");
+        key(&mut app, KeyCode::Esc);
+        assert!(app.quit);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn wide_window_shows_details_on_the_right_automatically() {
+        let root = sample_db("wide");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        let screen = render_at(&mut app, 140, 24);
+        println!("{screen}");
+        assert!(app.wide);
+        assert_eq!(app.table.selected(), Some(0), "top entry is selected");
+        // details panel sits on the same line as the table header, to its right
+        let header = screen.lines().find(|l| l.contains("Summary · Year")).unwrap();
+        assert!(header.contains("Entry details"));
+        assert!(screen.contains("@3") && !screen.contains("Enter details"));
+
+        // Enter does nothing in the wide layout; Esc quits right away
+        key(&mut app, KeyCode::Enter);
+        assert!(render_at(&mut app, 140, 24).contains("Entry details"));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.quit);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn narrow_window_needs_enter_for_details() {
+        let root = sample_db("narrow");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        let screen = render(&mut app);
+        assert!(!app.wide);
+        assert!(!screen.contains("Entry details") && screen.contains("Enter details"));
+        key(&mut app, KeyCode::Enter);
+        let screen = render(&mut app);
+        let header = screen.lines().find(|l| l.contains("Summary · Year")).unwrap();
+        assert!(!header.contains("Entry details"), "narrow details go below the table");
+        assert!(screen.contains("Entry details"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clicking_selected_row_opens_details() {
+        let root = sample_db("click-row");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        render(&mut app);
+        let a = app.table_area;
+        let click = |app: &mut App, y| {
+            app.on_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: a.x + 5,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let second_row = a.y + 1 + PAD.top + 1 + 1; // border, padding, header, first row
+        click(&mut app, second_row);
+        assert_eq!(app.table.selected(), Some(1));
+        assert!(!app.details);
+        click(&mut app, second_row);
+        assert!(app.details);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tag_picker_filters_by_tag() {
+        let root = sample_db("tag-picker");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        assert_eq!(
+            app.all_tags,
+            vec![("email".into(), 1), ("meetings".into(), 1), ("planning".into(), 1)]
+        );
+
+        press(&mut app, 't');
+        let screen = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Filter by tag") && screen.contains("All tags"));
+
+        // entry 0 = All tags, 1 = email, 2 = meetings
+        press(&mut app, 'j');
+        press(&mut app, 'j');
+        key(&mut app, KeyCode::Enter);
+        assert!(app.picker.is_none());
+        assert_eq!(app.tag.as_deref(), Some("meetings"));
+        let screen = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Tag: meetings") && screen.contains("tag meetings"));
+        assert!(screen.contains("Total 2:00:00") && !screen.contains("planning  "));
+
+        // the tag filter combines with the range filter
+        press(&mut app, '2');
+        assert!(render(&mut app).contains("No data found in the range") );
+        assert!(render(&mut app).contains("tagged with meetings"));
+
+        // Backspace outside the picker does nothing
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!(app.tag.as_deref(), Some("meetings"));
+
+        // Backspace inside the picker clears the tag filter and closes it
+        press(&mut app, 't');
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.picker.is_none());
+        assert_eq!(app.tag, None);
+        assert!(render(&mut app).contains("Total 4:00:00"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tag_picker_by_mouse_and_esc() {
+        let root = sample_db("tag-mouse");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        render(&mut app);
+        let (rect, _) = app.buttons.iter().find(|(_, b)| *b == Button::Tag).unwrap().clone();
+        let click = |app: &mut App, column, row| {
+            app.on_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        click(&mut app, rect.x + 2, rect.y + 1);
+        assert!(app.picker.is_some());
+        render(&mut app);
+        let a = app.picker_area;
+        click(&mut app, a.x + 1, a.y + 3); // "planning"
+        assert_eq!(app.tag.as_deref(), Some("planning"));
+
+        press(&mut app, 't');
+        key(&mut app, KeyCode::Esc);
+        assert!(app.picker.is_none() && !app.quit, "Esc only closes the picker");
+        assert_eq!(app.tag.as_deref(), Some("planning"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn local(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> i64 {
+        jiff::civil::date(y, mo, d).at(h, mi, 0, 0).to_zoned(jiff::tz::TimeZone::system()).unwrap().timestamp().as_second()
+    }
+
+    #[test]
+    fn range_input_parsing() {
+        // bare dates: To is inclusive
+        let r = parse_range_input("2025-03-01", "2025-03-31").unwrap();
+        assert_eq!((r.start, r.end), (local(2025, 3, 1, 0, 0), local(2025, 4, 1, 0, 0)));
+        assert_eq!(range_label(&r), "2025-03-01 – 2025-03-31");
+        // a single day
+        let r = parse_range_input("2025-03-05", "2025-03-05").unwrap();
+        assert_eq!(range_label(&r), "2025-03-05");
+        // times, with a space or a T, with or without seconds
+        let r = parse_range_input("2025-03-05 08:30", "2025-03-05T12:00:00").unwrap();
+        assert_eq!((r.start, r.end), (local(2025, 3, 5, 8, 30), local(2025, 3, 5, 12, 0)));
+        assert_eq!(range_label(&r), "2025-03-05 08:30 – 2025-03-05 12:00");
+        // open end
+        let r = parse_range_input("2025-03-01", "").unwrap();
+        assert!(!r.is_ended());
+        assert_eq!(range_label(&r), "since 2025-03-01");
+        // hints
+        assert_eq!(parse_range_input(":lastyear", "").unwrap(), expand_range_hint("lastyear").unwrap());
+        // errors
+        assert!(parse_range_input("", "").unwrap_err().contains("start date"));
+        assert!(parse_range_input("2025-03-05", "2025-03-01").unwrap_err().contains("after"));
+        assert!(parse_range_input("yesterday-ish", "").is_err());
+        assert!(parse_range_input(":nope", "").unwrap_err().contains("Unknown"));
+        assert!(parse_range_input(":week", "2025-01-01").is_err());
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, c);
+        }
+    }
+
+    fn clear_field(app: &mut App) {
+        app.on_key(KeyEvent {
+            code: KeyCode::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+    }
+
+    #[test]
+    fn custom_range_form() {
+        let root = sample_db("custom-range");
+        let mut app = App::new(root.clone());
+        let today = jiff::Zoned::now().date();
+        let yesterday = today.yesterday().unwrap();
+
+        // prefilled with the current (month) range
+        press(&mut app, 'c');
+        let input = app.range_input.clone().unwrap();
+        assert_eq!(input.from, local_date(app.range.start));
+        assert_eq!(input.to, local_date(app.range.end - 1));
+        let screen = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Date range") && screen.contains("From") && screen.contains("To"));
+
+        // invalid input shows an error and keeps the form open; typing 'q' doesn't quit
+        clear_field(&mut app);
+        type_text(&mut app, "qqq");
+        key(&mut app, KeyCode::Enter);
+        assert!(!app.quit && app.range_input.as_ref().unwrap().error.is_some());
+        assert!(render(&mut app).contains("not a valid date"));
+
+        // yesterday only
+        clear_field(&mut app);
+        type_text(&mut app, &yesterday.to_string());
+        key(&mut app, KeyCode::Tab);
+        clear_field(&mut app);
+        type_text(&mut app, &yesterday.to_string());
+        key(&mut app, KeyCode::Enter);
+        assert!(app.range_input.is_none());
+        assert_eq!(app.filter, Filter::Custom);
+        let screen = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains(&format!("5 {yesterday} ▾")));
+        assert!(screen.contains("Summary · Range") && screen.contains("Total 4:00:00"));
+
+        // reopening shows what was typed; Esc cancels without changes
+        press(&mut app, 'c');
+        assert_eq!(app.range_input.as_ref().unwrap().from, yesterday.to_string());
+        key(&mut app, KeyCode::Esc);
+        assert!(app.range_input.is_none() && !app.quit);
+        assert_eq!(app.filter, Filter::Custom);
+
+        // custom range combines with the tag filter, presets still work
+        press(&mut app, '1');
+        assert_eq!(app.filter, Filter::Day);
+        assert!(render(&mut app).contains("Total 3:00:00"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn custom_range_button_opens_form() {
+        let root = sample_db("custom-button");
+        let mut app = App::new(root.clone());
+        render(&mut app);
+        let (rect, _) = app.buttons.iter().find(|(_, b)| *b == Button::CustomRange).unwrap().clone();
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 2,
+            row: rect.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.range_input.is_some());
+        render(&mut app);
+        let to = app.range_fields[1];
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: to.x + 1, row: to.y, modifiers: KeyModifiers::NONE });
+        assert_eq!(app.range_input.as_ref().unwrap().field, 1);
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 0, row: 0, modifiers: KeyModifiers::NONE });
+        assert!(app.range_input.is_none(), "click outside closes the form");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn week_colors_alternate_per_iso_week() {
+        let row = |date: Option<&str>| summary::Row {
+            week: None,
+            date: date.map(str::to_string),
+            day_name: None,
+            id: String::new(),
+            tags: String::new(),
+            annotation: String::new(),
+            start: String::new(),
+            end: String::new(),
+            time: String::new(),
+            total: String::new(),
+            source: 0,
+        };
+        let rows = [
+            row(Some("2026-11-06")), // Fri W45
+            row(None),               // same day
+            row(Some("2026-11-09")), // Mon W46
+            row(Some("2026-11-13")), // Fri W46
+            row(Some("2026-11-16")), // Mon W47
+            row(None),
+            row(Some("2025-11-17")), // W47 of another year -> still a new week
+        ];
+        assert_eq!(week_parity(&rows), vec![0, 0, 1, 1, 0, 0, 1]);
+    }
+
+    #[test]
+    fn shift_3_opens_month_list_of_shown_year() {
+        let root = sample_db("months");
+        let mut app = App::new(root.clone());
+        let now = jiff::Zoned::now();
+        let yesterday = now.date().yesterday().unwrap();
+
+        for c in ['§', '#'] {
+            press(&mut app, c);
+            assert!(app.month_picker.is_some(), "{c} opens the month list");
+            key(&mut app, KeyCode::Esc);
+            assert!(app.month_picker.is_none() && !app.quit);
+        }
+        app.on_key(KeyEvent {
+            code: KeyCode::Char('3'),
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        assert!(app.month_picker.is_some(), "Shift+3 reported with modifier");
+
+        let p = app.month_picker.as_ref().unwrap();
+        assert_eq!(p.year, now.year());
+        assert_eq!(p.state.selected(), Some(now.month() as usize - 1));
+        let screen = render(&mut app);
+        println!("{screen}");
+        assert!(MONTH_NAMES.iter().all(|m| screen.contains(m)));
+
+        // previous year: pick January there
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.month_picker.as_ref().unwrap().year, now.year() - 1);
+        press(&mut app, 'g');
+        key(&mut app, KeyCode::Enter);
+        assert!(app.month_picker.is_none());
+        assert_eq!((app.filter, app.month), (Filter::Month, Some((now.year() - 1, 1))));
+        assert_eq!(app.range, month_range(now.year() - 1, 1));
+        let screen = render(&mut app);
+        assert!(screen.contains(&format!("3 {}-01 ▾", now.year() - 1)), "button shows the month number");
+        assert!(screen.contains("No data found"));
+
+        // opening again shows that year; plain 3 goes back to the current month
+        press(&mut app, '#');
+        assert_eq!(app.month_picker.as_ref().unwrap().year, now.year() - 1);
+        key(&mut app, KeyCode::Esc);
+        press(&mut app, '3');
+        assert_eq!(app.month, None);
+        assert_eq!(app.range, expand_range_hint("month").unwrap());
+
+        // Backspace in the list behaves like pressing 3
+        press(&mut app, '#');
+        key(&mut app, KeyCode::Left);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.month, Some((now.year() - 1, now.month())));
+        press(&mut app, '#');
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.month_picker.is_none());
+        assert_eq!((app.filter, app.month), (Filter::Month, None));
+        assert_eq!(app.range, expand_range_hint("month").unwrap());
+        press(&mut app, '4');
+        press(&mut app, '#');
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!((app.filter, app.month), (Filter::Month, None), "also from another filter");
+
+        // pick yesterday's month by mouse
+        press(&mut app, '#');
+        if yesterday.year() != now.year() {
+            key(&mut app, KeyCode::Left);
+        }
+        render(&mut app);
+        let a = app.month_picker_area;
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: a.x + 2,
+            row: a.y + yesterday.month() as u16 - 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.month, Some((yesterday.year(), yesterday.month())));
+        assert!(render(&mut app).contains("planning"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shift_4_opens_list_of_last_five_years() {
+        let root = sample_db("years");
+        let mut app = App::new(root.clone());
+        let this_year = jiff::Zoned::now().year();
+
+        press(&mut app, '$');
+        let p = app.year_picker.as_ref().expect("$ opens the year list");
+        assert_eq!(p.years, (0..5).map(|i| this_year - i).collect::<Vec<_>>());
+        assert_eq!(p.state.selected(), Some(0), "the shown (current) year is preselected");
+        let screen = render(&mut app);
+        println!("{screen}");
+        assert!(screen.contains(" Year ") && screen.contains(&(this_year - 4).to_string()));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.year_picker.is_none() && !app.quit);
+
+        app.on_key(KeyEvent {
+            code: KeyCode::Char('4'),
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        assert!(app.year_picker.is_some(), "Shift+4 reported with modifier");
+
+        // pick last year
+        press(&mut app, 'j');
+        key(&mut app, KeyCode::Enter);
+        assert_eq!((app.filter, app.year), (Filter::Year, Some(this_year - 1)));
+        assert_eq!(app.range, year_range(this_year - 1));
+        assert!(render(&mut app).contains(&format!("4 {} ▾", this_year - 1)));
+
+        // the month list now opens on that year
+        press(&mut app, '#');
+        assert_eq!(app.month_picker.as_ref().unwrap().year, this_year - 1);
+        key(&mut app, KeyCode::Esc);
+
+        // reopening preselects the shown year; Backspace = pressing 4
+        press(&mut app, '$');
+        assert_eq!(app.year_picker.as_ref().unwrap().state.selected(), Some(1));
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.year_picker.is_none());
+        assert_eq!((app.filter, app.year), (Filter::Year, None));
+        assert_eq!(app.range, expand_range_hint("year").unwrap());
+
+        // plain 4 also resets a picked year; mouse picking works
+        press(&mut app, '$');
+        render(&mut app);
+        let a = app.year_picker_area;
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: a.x + 2, row: a.y + 2, modifiers: KeyModifiers::NONE });
+        assert_eq!(app.year, Some(this_year - 2));
+        press(&mut app, '4');
+        assert_eq!(app.year, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn empty_database_shows_message() {
+        let root = env::temp_dir().join(format!("timew-tui-test-empty-{}", std::process::id()));
+        fs::create_dir_all(root.join("data")).unwrap();
+        let mut app = App::new(root.clone());
+        assert!(render(&mut app).contains("No data found in the range"));
+        let _ = fs::remove_dir_all(&root);
+    }
+}
