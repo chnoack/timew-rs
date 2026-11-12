@@ -89,28 +89,42 @@ window width:
 
 ```
 ╭ Hours per tag ───────────────────────────────────────────╮
-│  meetings      ███████████████████████  416.92 h   20 %  │
-│  planning      ████████████████▉        306.42 h   15 %  │
-│  email         ███████████████▏         275.25 h   13 %  │
+│  meetings      ███████████████  30.42 h  +7.50 h   18 %  │
+│  team          ██████████▌█▋    26.65 h  +5.35 h   16 %  │
+│  email         ██████████▏▌     25.65 h  +3.35 h   15 %  │
 │  …                                                       │
-│  Total 2086.58 h                                         │
+│  Total 167.67 h    █ own share  █ shared (+)             │
 ╰──────────────────────────────────────────────────────────╯
 ```
+
+(March 2025 of the example data. In the terminal, the first part of each bar
+is the tag's strong color and the second part a lighter shade of it.)
 
 - **What it counts:** exactly the entries in the list, so it follows the
   period and the tag filter. The hours are taken from the table's Time
   column, so an entry that crosses the edge of the range counts only its
   part inside the range.
-- **Order:** largest first. The longest bar is the largest tag, and the other
-  bars are drawn to scale using eighth blocks.
-- **Several tags:** an entry with several tags counts fully for each of
-  them, so the percentages can add up to more than 100 %. Entries without a
-  tag are shown as "(no tag)". The percentages are relative to the total.
-- **Colors:** every tag has its own color, used for its name and its bar.
-  The color comes from the tag's position in the alphabetical list of all
-  tags in the database, so a tag keeps its color when you change the
-  filters. The palette has 12 colors; after that the colors repeat.
-  "(no tag)" is gray.
+- **Several tags:** an entry's time is **split evenly** among its tags: an
+  entry of 3 h with the tags `email meetings risks` gives 1 h to each of
+  them. That is the tag's **own share**, shown as the strong part of the
+  bar and as the yellow number. The own shares of all tags add up exactly
+  to the total, and the percentages (own share ÷ total) to 100 %.
+- **Shared time:** the rest of the time of the entries that a tag shares
+  with other tags (2 h for each tag in the example) is the light part of
+  the bar and the gray `+… h` number. Own share plus shared time is the
+  full time of all entries with that tag. Shared time is counted for every
+  tag of the entry, so it doesn't add up to anything.
+- **Order and scale:** sorted by own share, largest first. All bars use the
+  same scale, set by the longest bar (own share plus shared time), and are
+  drawn with eighth blocks.
+- **Entries without a tag** are shown as "(no tag)", in gray.
+- **Legend:** when there is shared time, the Total line explains the two
+  shades.
+- **Colors:** every tag has its own color pair (strong and light) from the
+  256-color palette, used for its name and its bar. The pair comes from the
+  tag's position in the alphabetical list of all tags in the database, so a
+  tag keeps its colors when you change the filters. There are 12 pairs;
+  after that they repeat.
 - **Space:** in a narrow window, at most 10 tags are shown. In a wide window,
   the chart uses the height left below the details. If that isn't enough
   for every tag, the total line is dropped first, then the smallest tags are
@@ -251,7 +265,7 @@ Layout constants:
 | `DETAILS_MIN_WIDTH` | 44: the minimum width of the side panel |
 | `DETAILS_HEIGHT` | The height of the bottom details panel |
 | `CHART_MAX_BARS` | 10: the most bars in the bottom chart panel |
-| `TAG_COLORS` | The 12 chart colors, assigned in alphabetical tag order (`tag_color`) |
+| `TAG_COLORS` | The 12 (strong, light) chart color pairs, assigned in alphabetical tag order (`tag_colors`) |
 | `WEEK_COLORS` | `[Cyan, Magenta]`, alternating per ISO week (`week_parity`) |
 | `ACCENT` | Cyan, for highlights |
 

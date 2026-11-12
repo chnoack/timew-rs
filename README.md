@@ -14,34 +14,34 @@ browsing that data.
 ╭───────╮ ╭─────────────╮ ╭─────────────╮ ╭────────╮ ╭─────────╮   ╭───────╮
 │ 1 Day │ │ 2 Yesterday │ │ 3 2025-03 ▾ │ │ 4 Year │ │ 5 Range │   │ 6 Tag │
 ╰───────╯ ╰─────────────╯ ╰─────────────╯ ╰────────╯ ╰─────────╯   ╰───────╯
-╭ Summary · Month · 2025-03-01 – 2025-03-31 ───────────────╮╭ Entry details ───────────────────────────────╮
-│                                                          █│                                              │
-│  Wk  Date       Day Tags         Start   End Time Total  █│  ID         @2047                            │
-│  W10 2025-03-03 Mon budget        8:50  9:20 0:30        █│  Tags        budget                          │
-│                     stakeholders  9:20 10:20 1:00        ║│  Annotation (none)                           │
-│                     meetings     10:20 11:20 1:00        ║│                                              │
-│                     risks        11:20 12:25 1:05        ║│  Day        Monday                           │
-│                     meetings     12:55 14:55 2:00        ║│  Week       W10 2025                         │
-│                     reporting    14:55 15:40 0:45        ║│  Start      2025-03-03 Mon 08:50             │
-│                     meetings     15:40 15:55 0:15        ║│  End        2025-03-03 Mon 09:20             │
-│                     email        15:55 16:50 0:55  7.50  ║│  Duration   0:30                             │
-│  W10 2025-03-04 Tue team          7:20  7:50 0:30        ║│                                              │
-│                     stakeholders  7:50  8:35 0:45        ║╰──────────────────────────────────────────────╯
-│                     email         8:35  9:20 0:45        ║╭ Hours per tag ───────────────────────────────╮
-│                     team          9:20  9:50 0:30        ║│                                              │
-│                     email         9:50 10:05 0:15        ║│  meetings      ████████████  29.67 h   18 %  │
-│                     budget       10:05 10:35 0:30        ║│  team          ██████████▉   26.75 h   16 %  │
-│                     team         10:35 11:35 1:00        ║│  email         ██████████▊   26.67 h   16 %  │
-│                     reporting    11:35 12:00 0:25        ║│  planning      ████████▏     20.00 h   12 %  │
-│                     meetings     12:45 13:00 0:15        ║│  budget        ███████▍      18.17 h   11 %  │
-│                     team         13:00 14:00 1:00        ║│  stakeholders  ███████▎      18.00 h   11 %  │
-│                     stakeholders 14:00 14:45 0:45        ║│  reporting     ██████▏       15.08 h    9 %  │
-│                     meetings     14:45 15:00 0:15        ║│  risks         █████▍        13.33 h    8 %  │
-│                     planning     15:00 15:15 0:15        ║│                                              │
-│                     team         15:15 15:45 0:30        ║│  Total 167.67 h                              │
-│                     planning     15:45 16:30 0:45  8.42  ║│                                              │
-│  W10 2025-03-05 Wed team          7:55  8:10 0:15        ║│                                              │
-╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+╭ Summary · Month · 2025-03-01 – 2025-03-31 ───────────────────────────────────╮╭ Entry details ───────────────────────────────────────────╮
+│                                                                              █│                                                          │
+│  Wk  Date       Day Tags                             Start   End Time Total  █│  ID         @2047                                        │
+│  W10 2025-03-03 Mon budget                            8:50  9:20 0:30        █│  Tags        budget                                      │
+│                     stakeholders                      9:20 10:20 1:00        ║│  Annotation (none)                                       │
+│                     meetings                         10:20 11:20 1:00        ║│                                                          │
+│                     email, risks                     11:20 12:25 1:05        ║│  Day        Monday                                       │
+│                     meetings, planning, stakeholders 12:55 14:55 2:00        ║│  Week       W10 2025                                     │
+│                     reporting                        14:55 15:40 0:45        ║│  Start      2025-03-03 Mon 08:50                         │
+│                     meetings                         15:40 15:55 0:15        ║│  End        2025-03-03 Mon 09:20                         │
+│                     email                            15:55 16:50 0:55  7.50  ║│  Duration   0:30                                         │
+│  W10 2025-03-04 Tue team                              7:20  7:50 0:30        ║│                                                          │
+│                     stakeholders, team                7:50  8:35 0:45        ║╰──────────────────────────────────────────────────────────╯
+│                     email                             8:35  9:20 0:45        ║╭ Hours per tag ───────────────────────────────────────────╮
+│                     team                              9:20  9:50 0:30        ║│                                                          │
+│                     email                             9:50 10:05 0:15        ║│  meetings      ███████████████  30.42 h  +7.50 h   18 %  │
+│                     budget                           10:05 10:35 0:30        ║│  team          ██████████▌█▋    26.65 h  +5.35 h   16 %  │
+│                     team                             10:35 11:35 1:00        ║│  email         ██████████▏▌     25.65 h  +3.35 h   15 %  │
+│                     reporting                        11:35 12:00 0:25        ║│  planning      ████████▌█▍      21.43 h  +4.74 h   13 %  │
+│                     budget, meetings                 12:45 13:00 0:15        ║│  stakeholders  ███████▋▉        19.38 h  +3.12 h   12 %  │
+│                     team                             13:00 14:00 1:00        ║│  budget        ██████▌▎         16.33 h  +2.08 h   10 %  │
+│                     stakeholders                     14:00 14:45 0:45        ║│  reporting     █████▌▌          14.01 h  +2.32 h    8 %  │
+│                     meetings                         14:45 15:00 0:15        ║│  risks         █████▌▎          13.79 h  +2.04 h    8 %  │
+│                     planning                         15:00 15:15 0:15        ║│                                                          │
+│                     team                             15:15 15:45 0:30        ║│  Total 167.67 h    █ own share  █ shared (+)             │
+│                     planning                         15:45 16:30 0:45  8.42  ║│                                                          │
+│  W10 2025-03-05 Wed team                              7:55  8:10 0:15        ║│                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
  Total 167.67 h  ·  21 days  ·  206 intervals  ·  avg/day 7.98 h  ·  row 1/206
  ↑↓ move  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  PgUp/Dn page  r reload  q quit
 ```
@@ -122,7 +122,9 @@ A separate program for browsing the summary interactively:
 - **Details:** a side panel for the selected entry when the window is wide
   enough, otherwise a bottom panel opened with `Enter`.
 - **Chart:** a bar chart of the hours per tag for the entries in the list,
-  with one color per tag. It's always shown below the details in a wide
+  with one color per tag. An entry with several tags is split evenly among
+  them, so the bars add up to the total; the time shared with other tags is
+  shown in a lighter shade. It's always shown below the details in a wide
   window; in a narrow one, `b` shows it.
 - **Filters:** quick buttons for day, yesterday, month and year, plus lists
   to pick a month (Shift+3) or one of the last 5 years (Shift+4), a form for

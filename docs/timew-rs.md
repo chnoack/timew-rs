@@ -88,10 +88,13 @@ timew-rs summary @3 @4
 Prints the same table as `timew summary`:
 
 ```
-Wk  Date       Day ID    Tags         Annotation    Start      End    Time   Total
---- ---------- --- ----- ------------ ---------- -------- -------- ------- -------
-W10 2025-03-03 Mon @2047 budget                   8:50:00  9:20:00 0:30:00
-                   @2046 stakeholders             9:20:00 10:20:00 1:00:00
+Wk  Date       Day ID    Tags                             Annotation    Start      End    Time   Total
+--- ---------- --- ----- -------------------------------- ---------- -------- -------- ------- -------
+W10 2025-03-03 Mon @2047 budget                                       8:50:00  9:20:00 0:30:00
+                   @2046 stakeholders                                 9:20:00 10:20:00 1:00:00
+                   @2045 meetings                                    10:20:00 11:20:00 1:00:00
+                   @2044 email, risks                                11:20:00 12:25:00 1:05:00
+                   @2043 meetings, planning, stakeholders            12:55:00 14:55:00 2:00:00
 …
 ```
 
@@ -120,7 +123,8 @@ JSON, one object per line, oldest first:
 ```json
 [
 {"id":2045,"start":"20250303T092000Z","end":"20250303T102000Z","tags":["meetings"]},
-{"id":2043,"start":"20250303T115500Z","end":"20250303T135500Z","tags":["meetings"]}
+{"id":2043,"start":"20250303T115500Z","end":"20250303T135500Z","tags":["meetings","planning","stakeholders"]},
+{"id":2041,"start":"20250303T144000Z","end":"20250303T145500Z","tags":["meetings"]}
 ]
 ```
 

@@ -12,11 +12,13 @@ Rules:
   * work starts between 07:00 and 09:00 (local time)
   * work ends between 15:30 and 18:00 (local time)
   * tracked work time averages 8h per work day (lunch break is untracked)
-  * every interval carries exactly one of 8 PM topic tags
+  * every interval carries one of 8 PM topic tags; about 15 % of them get a
+    second topic tag and a few of those a third (e.g. "budget meetings")
 
 Usage:
     python3 examples/generate_pm_data.py [--year 2025] [--out examples/pm-2025]
                                          [--tz Europe/Berlin] [--seed 42]
+                                         [--multi 0.15]
 """
 
 import argparse
@@ -77,6 +79,17 @@ def split_block(rng: random.Random, start: int, end: int, prev: str | None):
         t += length
 
 
+def extra_tags(rng: random.Random, topic: str, multi: float) -> list[str]:
+    """Additional tags for an interval whose main tag is `topic`: one more
+    with probability `multi`, and of those a third one with probability
+    `multi` again. Never repeats a tag."""
+    extra: list[str] = []
+    while len(extra) < 2 and rng.random() < multi:
+        names = [t for t in TOPICS if t != topic and t not in extra]
+        extra.append(rng.choices(names, [TOPICS[t] for t in names])[0])
+    return extra
+
+
 def to_utc(day: date, minutes: int, tz: ZoneInfo) -> datetime:
     local = datetime.combine(day, time(minutes // 60, minutes % 60), tzinfo=tz)
     return local.astimezone(timezone.utc)
@@ -92,17 +105,23 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--tz", default="Europe/Berlin")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--multi", type=float, default=0.15,
+                    help="probability of an extra tag per interval (0 = one tag each)")
     args = ap.parse_args()
 
     out = args.out or Path(__file__).parent / f"pm-{args.year}"
     tz = ZoneInfo(args.tz)
     rng = random.Random(args.seed)
+    # Extra tags come from their own generator, so the schedule (times and
+    # main tags) is the same whatever --multi is.
+    tag_rng = random.Random(args.seed + 1)
 
     months: dict[str, list[str]] = {}
     counts = {t: 0 for t in TOPICS}
     minutes_per_topic = {t: 0 for t in TOPICS}
     days = 0
     total = 0
+    multi_tagged = 0
 
     day = date(args.year, 1, 1)
     while day.year == args.year:
@@ -113,11 +132,14 @@ def main() -> None:
             for block in ((start, l0), (l1, end)):
                 for a, b, topic in split_block(rng, *block, prev):
                     s, e = to_utc(day, a, tz), to_utc(day, b, tz)
+                    tags = sorted([topic, *extra_tags(tag_rng, topic, args.multi)])
                     months.setdefault(s.strftime("%Y-%m"), []).append(
-                        f"inc {fmt(s)} - {fmt(e)} # {topic}"
+                        f"inc {fmt(s)} - {fmt(e)} # {' '.join(tags)}"
                     )
-                    counts[topic] += 1
-                    minutes_per_topic[topic] += b - a
+                    for t in tags:
+                        counts[t] += 1
+                        minutes_per_topic[t] += b - a
+                    multi_tagged += len(tags) > 1
                     total += b - a
                     prev = topic
         day += timedelta(days=1)
@@ -130,7 +152,8 @@ def main() -> None:
     body = ",\n".join(f'  {json.dumps(t)}:{{"count":{c}}}' for t, c in sorted(counts.items()))
     (data / "tags.data").write_text("{\n" + body + "\n}\n")
 
-    print(f"wrote {out}: {days} work days, {sum(counts.values())} intervals")
+    intervals = sum(len(lines) for lines in months.values())
+    print(f"wrote {out}: {days} work days, {intervals} intervals ({multi_tagged} with several tags)")
     print(f"average tracked time per work day: {total / days / 60:.2f} h")
     for t in sorted(TOPICS, key=minutes_per_topic.get, reverse=True):
         print(f"  {t:<13} {minutes_per_topic[t] / 60:7.1f} h  ({counts[t]} intervals)")

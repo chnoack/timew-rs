@@ -772,28 +772,35 @@ const ACCENT: Color = Color::Cyan;
 /// Wk/Date/Day colors, alternating from one ISO week to the next.
 const WEEK_COLORS: [Color; 2] = [Color::Cyan, Color::Magenta];
 /// Colors for the tags in the chart, assigned in alphabetical tag order.
-const TAG_COLORS: [Color; 12] = [
-    Color::Cyan,
-    Color::Magenta,
-    Color::Green,
-    Color::Blue,
-    Color::Red,
-    Color::Yellow,
-    Color::LightCyan,
-    Color::LightMagenta,
-    Color::LightGreen,
-    Color::LightBlue,
-    Color::LightRed,
-    Color::LightYellow,
+/// Chart colors per tag as (strong, light) pairs from the 256-color palette:
+/// strong for the tag's own share of the time, light for the time it shares
+/// with other tags.
+const TAG_COLORS: [(Color, Color); 12] = [
+    (Color::Indexed(31), Color::Indexed(117)),  // blue
+    (Color::Indexed(127), Color::Indexed(219)), // magenta
+    (Color::Indexed(28), Color::Indexed(120)),  // green
+    (Color::Indexed(166), Color::Indexed(216)), // orange
+    (Color::Indexed(37), Color::Indexed(159)),  // cyan
+    (Color::Indexed(124), Color::Indexed(210)), // red
+    (Color::Indexed(136), Color::Indexed(229)), // olive
+    (Color::Indexed(55), Color::Indexed(147)),  // purple
+    (Color::Indexed(94), Color::Indexed(180)),  // brown
+    (Color::Indexed(162), Color::Indexed(218)), // pink
+    (Color::Indexed(24), Color::Indexed(153)),  // steel blue
+    (Color::Indexed(64), Color::Indexed(193)),  // lime
 ];
 
-/// A tag's chart color. It comes from the tag's position among all tags in
-/// the database, so a tag keeps its color when the filters change. Tags
-/// beyond the palette reuse its colors; "(no tag)" is gray.
-fn tag_color(app: &App, tag: &str) -> Color {
+/// Gray (strong, light) pair, for "(no tag)" and the legend.
+const GRAY_COLORS: (Color, Color) = (Color::Indexed(244), Color::Indexed(250));
+
+/// A tag's (strong, light) chart colors. They come from the tag's position
+/// among all tags in the database, so a tag keeps its colors when the
+/// filters change. Tags beyond the palette reuse its colors; "(no tag)" is
+/// gray.
+fn tag_colors(app: &App, tag: &str) -> (Color, Color) {
     match app.all_tags.iter().position(|(t, _)| t == tag) {
         Some(i) => TAG_COLORS[i % TAG_COLORS.len()],
-        None => Color::DarkGray,
+        None => GRAY_COLORS,
     }
 }
 
@@ -869,47 +876,92 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_legend(frame, frame.area(), app);
 }
 
-/// Hours per tag over the rows currently in the list, largest first (ties by
-/// name). An entry with several tags counts fully for each of them; entries
-/// without tags are collected under "(no tag)". Uses each row's own (per-day,
-/// range-clipped) time, so the numbers match the table.
-fn tag_totals(app: &App) -> Vec<(String, i64)> {
-    let mut totals = std::collections::BTreeMap::<String, i64>::new();
+/// One bar of the hours-per-tag chart (times in seconds).
+#[derive(Debug, Clone, PartialEq)]
+struct TagTotal {
+    tag: String,
+    /// The tag's even share: an entry with n tags gives 1/n of its time to
+    /// each of them. The shares of all tags add up to the period's total.
+    share: f64,
+    /// The rest of the time of entries that have this tag together with
+    /// others (their time minus this tag's share of it). `share + shared` is
+    /// the full time of all entries that have the tag.
+    shared: f64,
+}
+
+/// Hours per tag over the rows currently in the list, splitting each entry's
+/// time evenly among its tags (see `TagTotal`). Entries without tags count
+/// for "(no tag)". Each row's own (per-day, range-clipped) time is used, so
+/// the numbers match the table. Sorted by share, then shared time, then name.
+fn tag_totals(app: &App) -> Vec<TagTotal> {
+    let mut totals = std::collections::BTreeMap::<String, (f64, f64)>::new();
     for row in &app.summary.rows {
-        let secs = parse_hms(&row.time).unwrap_or(0);
+        let secs = parse_hms(&row.time).unwrap_or(0) as f64;
         let tags = &app.tracked[row.source].interval.tags;
         if tags.is_empty() {
-            *totals.entry("(no tag)".to_string()).or_default() += secs;
+            totals.entry("(no tag)".to_string()).or_default().0 += secs;
         }
+        let share = secs / tags.len().max(1) as f64;
         for tag in tags {
-            *totals.entry(tag.clone()).or_default() += secs;
+            let t = totals.entry(tag.clone()).or_default();
+            t.0 += share;
+            t.1 += secs - share;
         }
     }
-    let mut v: Vec<_> = totals.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut v: Vec<TagTotal> =
+        totals.into_iter().map(|(tag, (share, shared))| TagTotal { tag, share, shared }).collect();
+    v.sort_by(|a, b| b.share.total_cmp(&a.share).then(b.shared.total_cmp(&a.shared)).then_with(|| a.tag.cmp(&b.tag)));
     v
+}
+
+/// Decimal hours with two places from (possibly fractional) seconds.
+fn decimal_hours_f(seconds: f64) -> String {
+    format!("{:.2}", seconds / 3600.0)
 }
 
 /// Most bars shown in the bottom (narrow-layout) chart panel.
 const CHART_MAX_BARS: usize = 10;
 
 /// Height of the bottom chart panel for `totals`.
-fn chart_height(totals: &[(String, i64)]) -> u16 {
+fn chart_height(totals: &[TagTotal]) -> u16 {
     let bars = totals.len().clamp(1, CHART_MAX_BARS) as u16;
     // bars + an "… more" line if cut off + blank + total line + borders + padding
     let more = u16::from(totals.len() > CHART_MAX_BARS);
     bars + more + 2 + 2 + PAD.top + PAD.bottom
 }
 
-/// A bar of `width` cells filled to `frac` (0..=1), using eighth blocks.
-fn bar(frac: f64, width: usize) -> String {
-    const PARTS: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
-    let eighths = (frac.clamp(0.0, 1.0) * width as f64 * 8.0).round() as usize;
-    let mut s = "█".repeat(eighths / 8);
-    if eighths % 8 > 0 {
-        s.push(PARTS[eighths % 8]);
+/// A stacked bar of `width` cells using eighth blocks: the first `strong_frac`
+/// (0..=1) in `strong`, then up to `strong_frac + light_frac` in `light`.
+/// The cell where the strong part ends shows it on a light background.
+/// Returns styled spans that are exactly `width` cells wide.
+fn stacked_bar(strong_frac: f64, light_frac: f64, width: usize, strong: Color, light: Color) -> Vec<Span<'static>> {
+    const PARTS: [&str; 8] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let eighths = |f: f64| (f.clamp(0.0, 1.0) * width as f64 * 8.0).round() as usize;
+    let s = eighths(strong_frac);
+    let t = eighths(strong_frac + light_frac).max(s);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for cell in 0..width {
+        let fill_s = s.saturating_sub(cell * 8).min(8);
+        let fill_t = t.saturating_sub(cell * 8).min(8);
+        let (text, style) = if fill_s == 8 {
+            ("█", Style::new().fg(strong))
+        } else if fill_s > 0 && fill_t > fill_s {
+            (PARTS[fill_s], Style::new().fg(strong).bg(light))
+        } else if fill_s > 0 {
+            (PARTS[fill_s], Style::new().fg(strong))
+        } else if fill_t == 8 {
+            ("█", Style::new().fg(light))
+        } else if fill_t > 0 {
+            (PARTS[fill_t], Style::new().fg(light))
+        } else {
+            (" ", Style::new())
+        };
+        match spans.last_mut() {
+            Some(last) if last.style == style => last.content.to_mut().push_str(text),
+            _ => spans.push(Span::styled(text, style)),
+        }
     }
-    s
+    spans
 }
 
 fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
@@ -942,31 +994,48 @@ fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         block.title(" Hours per tag ")
     };
-    let max = totals.first().map_or(0, |t| t.1).max(1);
-    let sum: i64 = app.summary.grand_total;
-    let name_w = totals.iter().take(shown).map(|(t, _)| t.chars().count()).max().unwrap_or(0);
-    let value_w = totals.iter().take(shown).map(|(_, s)| decimal_hours(*s).len()).max().unwrap_or(4);
-    // "name  ███  12.50 h   42 %": name + 2, bar, 2 + value + " h", 2 + pct(3) + " %"
-    let fixed = name_w + 2 + (2 + value_w + 2) + (2 + 3 + 2);
+    // bars are scaled to the largest full time (share + shared)
+    let max = totals.iter().map(|t| t.share + t.shared).fold(0.0, f64::max).max(1.0);
+    let sum = app.summary.grand_total as f64;
+    let any_shared = totals.iter().any(|t| t.shared > 0.0);
+    let name_w = totals.iter().take(shown).map(|t| t.tag.chars().count()).max().unwrap_or(0);
+    let value_w = totals.iter().take(shown).map(|t| decimal_hours_f(t.share).len()).max().unwrap_or(4);
+    let shared_w =
+        totals.iter().take(shown).filter(|t| t.shared > 0.0).map(|t| decimal_hours_f(t.shared).len()).max();
+    // "name  ███▒▒  12.50 h  +3.25 h   42 %":
+    // name + 2, bar, 2 + value + " h", [2 + "+" + shared + " h"], 2 + pct(3) + " %"
+    let shared_cols = shared_w.map_or(0, |w| 2 + 1 + w + 2);
+    let fixed = name_w + 2 + (2 + value_w + 2) + shared_cols + (2 + 3 + 2);
     let bar_w = (inner.width as usize).saturating_sub(fixed).max(1);
 
     let mut lines: Vec<Line> = totals
         .iter()
         .take(shown)
-        .map(|(tag, secs)| {
-            let pct = if sum > 0 { *secs as f64 * 100.0 / sum as f64 } else { 0.0 };
-            Line::from(vec![
-                Span::styled(format!("{tag:<name_w$}  "), Style::new().fg(tag_color(app, tag))),
-                Span::styled(format!("{:<bar_w$}", bar(*secs as f64 / max as f64, bar_w)), Style::new().fg(tag_color(app, tag))),
-                Span::styled(format!("  {:>value_w$} h", decimal_hours(*secs)), Style::new().fg(Color::Yellow).bold()),
-                Span::styled(format!("  {pct:>3.0} %"), Style::new().dim()),
-            ])
+        .map(|t| {
+            let (strong, light) = tag_colors(app, &t.tag);
+            let pct = if sum > 0.0 { t.share * 100.0 / sum } else { 0.0 };
+            let mut spans = vec![Span::styled(format!("{:<name_w$}  ", t.tag), Style::new().fg(strong))];
+            spans.extend(stacked_bar(t.share / max, t.shared / max, bar_w, strong, light));
+            spans.push(Span::styled(
+                format!("  {:>value_w$} h", decimal_hours_f(t.share)),
+                Style::new().fg(Color::Yellow).bold(),
+            ));
+            if let Some(w) = shared_w {
+                let text = if t.shared > 0.0 {
+                    format!("  +{:>w$} h", decimal_hours_f(t.shared))
+                } else {
+                    " ".repeat(2 + 1 + w + 2)
+                };
+                spans.push(Span::styled(text, Style::new().fg(Color::Gray)));
+            }
+            spans.push(Span::styled(format!("  {pct:>3.0} %"), Style::new().dim()));
+            Line::from(spans)
         })
         .collect();
     if shown < totals.len() {
-        let rest: i64 = totals[shown..].iter().map(|t| t.1).sum();
+        let rest: f64 = totals[shown..].iter().map(|t| t.share).sum();
         lines.push(Line::styled(
-            format!("… {} more tags, {} h", totals.len() - shown, decimal_hours(rest)),
+            format!("… {} more tags, {} h", totals.len() - shown, decimal_hours_f(rest)),
             Style::new().dim(),
         ));
     }
@@ -975,10 +1044,21 @@ fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
     }
     if show_total {
         lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
+        let mut total = vec![
             Span::styled("Total ", Style::new().dim()),
-            Span::styled(format!("{} h", decimal_hours(sum)), Style::new().fg(Color::Yellow).bold()),
-        ]));
+            Span::styled(format!("{} h", decimal_hours(app.summary.grand_total)), Style::new().fg(Color::Yellow).bold()),
+        ];
+        if any_shared {
+            // legend for the two shades
+            total.extend([
+                Span::raw("    "),
+                Span::styled("█", Style::new().fg(GRAY_COLORS.0)),
+                Span::styled(" own share  ", Style::new().dim()),
+                Span::styled("█", Style::new().fg(GRAY_COLORS.1)),
+                Span::styled(" shared (+)", Style::new().dim()),
+            ]);
+        }
+        lines.push(Line::from(total));
     }
 
     frame.render_widget(Clear, area);
@@ -2244,8 +2324,8 @@ mod tests {
         let mut app = App::new(root.clone());
         press(&mut app, '4');
         assert_eq!(
-            tag_totals(&app),
-            vec![("planning".into(), 4 * 3600), ("meetings".into(), 2 * 3600), ("email".into(), 3600)]
+            simple(&tag_totals(&app)),
+            vec![("planning".into(), 4 * 3600, 0), ("meetings".into(), 2 * 3600, 0), ("email".into(), 3600, 0)]
         );
 
         // wide: the chart is always shown, below the details on the right
@@ -2269,7 +2349,7 @@ mod tests {
 
         // the chart follows the filters
         press(&mut app, '1');
-        assert_eq!(tag_totals(&app), vec![("meetings".into(), 2 * 3600), ("email".into(), 3600)]);
+        assert_eq!(simple(&tag_totals(&app)), vec![("meetings".into(), 2 * 3600, 0), ("email".into(), 3600, 0)]);
         assert!(chart_line(&render_at(&mut app, 140, 34), "email").contains('█'));
 
         // narrow: b shows the chart below the table; Esc closes it, Enter switches to details
@@ -2304,12 +2384,12 @@ mod tests {
         let root = sample_db("colors");
         let mut app = App::new(root.clone());
         press(&mut app, '4');
-        let colors: Vec<Color> = ["email", "meetings", "planning"].iter().map(|t| tag_color(&app, t)).collect();
+        let colors: Vec<_> = ["email", "meetings", "planning"].iter().map(|t| tag_colors(&app, t)).collect();
         assert_eq!(colors, vec![TAG_COLORS[0], TAG_COLORS[1], TAG_COLORS[2]]);
-        assert_eq!(tag_color(&app, "(no tag)"), Color::DarkGray);
+        assert_eq!(tag_colors(&app, "(no tag)"), GRAY_COLORS);
         // a filter doesn't change a tag's color
         press(&mut app, '1');
-        assert_eq!(tag_color(&app, "meetings"), TAG_COLORS[1]);
+        assert_eq!(tag_colors(&app, "meetings"), TAG_COLORS[1]);
         // the bars are drawn in those colors
         let mut terminal = Terminal::new(TestBackend::new(140, 34)).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -2320,8 +2400,8 @@ mod tests {
             let x = (0..buf.area.width).find(|&x| buf[(x, y)].symbol() == "█").unwrap();
             buf[(x, y)].fg
         };
-        assert_eq!(bar_color("meetings"), TAG_COLORS[1]);
-        assert_eq!(bar_color("email"), TAG_COLORS[0]);
+        assert_eq!(bar_color("meetings"), TAG_COLORS[1].0);
+        assert_eq!(bar_color("email"), TAG_COLORS[0].0);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2350,33 +2430,82 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// `TagTotal`s as (tag, share, shared) in whole seconds, for comparing.
+    fn simple(totals: &[TagTotal]) -> Vec<(String, i64, i64)> {
+        totals.iter().map(|t| (t.tag.clone(), t.share.round() as i64, t.shared.round() as i64)).collect()
+    }
+
     #[test]
-    fn tag_totals_count_each_tag_and_untagged_entries() {
+    fn tag_totals_split_time_evenly() {
         let root = env::temp_dir().join(format!("timew-tui-test-multitag-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("data")).unwrap();
         let tz = jiff::tz::TimeZone::system();
         let today = jiff::Zoned::now().date();
         let at = |h: i8| timew_rs::interval::format_iso(today.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
-        let lines = format!("inc {} - {} # a b\ninc {} - {}\n", at(8), at(10), at(10), at(11));
+        // 8-10 "a b", 10-11 untagged, 11-14 "a b c", 14-15 "c"
+        let lines = format!(
+            "inc {} - {} # a b\ninc {} - {}\ninc {} - {} # a b c\ninc {} - {} # c\n",
+            at(8), at(10), at(10), at(11), at(11), at(14), at(14), at(15)
+        );
         fs::write(root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month())), lines).unwrap();
         let mut app = App::new(root.clone());
         press(&mut app, '1');
+        let totals = tag_totals(&app);
         assert_eq!(
-            tag_totals(&app),
-            vec![("a".into(), 7200), ("b".into(), 7200), ("(no tag)".into(), 3600)]
+            simple(&totals),
+            vec![
+                // a and b: 2h/2 + 3h/3 = 2h own share; shared 1h + 2h = 3h
+                ("a".into(), 7200, 3 * 3600),
+                ("b".into(), 7200, 3 * 3600),
+                // c: 3h/3 + 1h = 2h own share; shared 2h (same share, less shared: after a and b)
+                ("c".into(), 7200, 7200),
+                ("(no tag)".into(), 3600, 0),
+            ]
         );
+        // the own shares add up exactly to the total (7 h)
+        let shares: f64 = totals.iter().map(|t| t.share).sum();
+        assert!((shares - app.summary.grand_total as f64).abs() < 1e-6);
+        assert_eq!(app.summary.grand_total, 7 * 3600);
+        // own share + shared = the full time of the entries with that tag
+        assert_eq!(totals[0].share + totals[0].shared, 5.0 * 3600.0);
+
+        // the chart shows the share in yellow, the shared time as "+", and a legend
+        let screen = render_at(&mut app, 140, 34);
+        println!("{screen}");
+        let a = chart_line(&screen, "a ");
+        assert!(a.contains(" 2.00 h") && a.contains("+3.00 h") && a.contains("29 %"), "{a}");
+        let none = chart_line(&screen, "(no tag)");
+        assert!(!none.contains('+'), "{none}");
+        assert!(screen.contains("own share") && screen.contains("shared (+)"));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn bars_use_eighth_blocks() {
-        assert_eq!(bar(1.0, 4), "████");
-        assert_eq!(bar(0.5, 4), "██");
-        assert_eq!(bar(0.0, 4), "");
-        assert_eq!(bar(1.0 / 32.0, 4), "▏");
-        assert_eq!(bar(0.5 + 1.0 / 16.0, 4), "██▎"); // 2.25 cells
-        assert_eq!(bar(0.625, 4), "██▌"); // 2.5 cells
+    fn stacked_bars_use_eighth_blocks_in_two_shades() {
+        let (s, l) = (Color::Indexed(1), Color::Indexed(2));
+        let parts = |strong, light| -> Vec<(String, Style)> {
+            stacked_bar(strong, light, 4, s, l).into_iter().map(|sp| (sp.content.to_string(), sp.style)).collect()
+        };
+        let fg = |c| Style::new().fg(c);
+        assert_eq!(parts(1.0, 0.0), vec![("████".into(), fg(s))]);
+        assert_eq!(parts(0.5, 0.0), vec![("██".into(), fg(s)), ("  ".into(), Style::new())]);
+        assert_eq!(parts(0.0, 0.0), vec![("    ".into(), Style::new())]);
+        assert_eq!(parts(1.0 / 32.0, 0.0), vec![("▏".into(), fg(s)), ("   ".into(), Style::new())]);
+        // 2.25 cells strong
+        assert_eq!(parts(0.5625, 0.0), vec![("██▎".into(), fg(s)), (" ".into(), Style::new())]);
+        // half strong, a quarter light
+        assert_eq!(parts(0.5, 0.25), vec![("██".into(), fg(s)), ("█".into(), fg(l)), (" ".into(), Style::new())]);
+        // the strong part ends inside a cell that the light part continues
+        assert_eq!(
+            parts(0.5625, 0.4375),
+            vec![("██".into(), fg(s)), ("▎".into(), Style::new().fg(s).bg(l)), ("█".into(), fg(l))]
+        );
+        // always exactly `width` cells
+        for (a, b) in [(0.0, 0.0), (0.3, 0.3), (0.7, 0.3), (1.0, 0.0), (0.1, 0.05)] {
+            let w: usize = parts(a, b).iter().map(|(t, _)| t.chars().count()).sum();
+            assert_eq!(w, 4, "{a} {b}");
+        }
     }
 
     #[test]
