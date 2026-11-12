@@ -25,15 +25,15 @@ shows changes made by `timew` while the TUI is running.
 
 ```
  timew-tui   /path/to/db  (read-only)                                     ← header
-╭───────╮ ╭─────────────╮ ╭─────────╮ ╭────────╮ ╭──────────╮   ╭──────────────╮
-│ 1 Day │ │ 2 Yesterday │ │ 3 Month │ │ 4 Year │ │ 5 Range… │   │ 6 Tag: all ▾ │  ← filter buttons
-╰───────╯ ╰─────────────╯ ╰─────────╯ ╰────────╯ ╰──────────╯   ╰──────────────╯
+╭───────╮ ╭─────────────╮ ╭─────────╮ ╭────────╮ ╭─────────╮   ╭───────╮
+│ 1 Day │ │ 2 Yesterday │ │ 3 Month │ │ 4 Year │ │ 5 Range │   │ 6 Tag │  ← filter buttons
+╰───────╯ ╰─────────────╯ ╰─────────╯ ╰────────╯ ╰─────────╯   ╰───────╯
 ╭ Summary · Month · 2026-11-01 – 2026-11-30 ──────╮╭ Entry details ────────────╮
 │  Wk  Date       Day Tags      Start    End  …   ││  ID         @3            │  ← summary + details
-│  W46 2026-11-11 Wed planning  8:00:00 12:00:00  ││  Tags        planning     │
+│  W46 2026-11-11 Wed planning  8:00 12:00 4:00 … ││  Tags        planning     │
 ╰─────────────────────────────────────────────────╯╰───────────────────────────╯
- Total 7:00:00  ·  2 days  ·  3 intervals  ·  avg/day 3:30:00  ·  row 1/3      ← status
- ↑↓ move  PgUp/Dn page  1-4 range  ⇧3/⇧4 pick  c custom  t tag  …              ← help
+ Total 7.00 h  ·  2 days  ·  3 intervals  ·  avg/day 3.50 h  ·  row 1/3        ← status
+ ↑↓ move  PgUp/Dn page  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  …              ← help
 ```
 
 - **Summary table:** columns Wk, Date, Day, Tags, Start, End, Time and Total.
@@ -41,6 +41,13 @@ shows changes made by `timew` while the TUI is running.
   Wk/Date/Day are **cyan and magenta, alternating each ISO week**. Every
   other day has a slightly darker background, and the daily totals are
   yellow.
+- **Times and durations:** start, end, the per-entry Time and the duration
+  in the details are hours and minutes without seconds (`8:50`, `0:30`).
+  Seconds are cut off, not rounded.
+- **Totals** (the Total column, the status line's total and average) are
+  **decimal hours** with two places: 7:30 is shown as `7.50`, 8:25 as
+  `8.42`. `timew-rs summary` still shows `H:MM:SS` everywhere, because its
+  output matches `timew`.
 - **Status line:** the total, the number of days with entries, the number of
   rows, the average per day with entries, and your position in the list.
 - **Average per day** counts only days that have entries.
@@ -56,12 +63,13 @@ Where it appears depends on the window width:
 
 | Window | Details panel |
 | --- | --- |
-| **Wide**: the table's natural width plus 44 columns fits | Always shown **on the right**, for the selected row. The top row is selected after every load. |
+| **Wide**: the table's width plus 44 columns fits | Always shown **on the right**, for the selected row. The top row is selected after every load. |
 | **Narrow** | Shown **below** the table after `Enter` (or a click on the selected row). `Enter`/`Esc` closes it. |
 
-The table's width depends on its content (mostly the longest tag), so the
-switching point can move slightly between filters. The layout is chosen
-again on every redraw, so resizing the terminal switches immediately.
+The table is as wide as its columns need (mostly the longest tag), and at
+least as wide as its title. So the switching point can move slightly between
+filters. The layout is chosen again on every redraw, so resizing the
+terminal switches immediately.
 
 ## Keys
 
@@ -119,9 +127,9 @@ A view is a **period** combined with an optional **tag**.
 | Day, Yesterday | `1 Day`, `2 Yesterday` |
 | Current month / a picked month | `3 Month` / `3 2025-03 ▾` |
 | Current year / a picked year | `4 Year` / `4 2025 ▾` |
-| Your own range | `5 Range…` / `5 2025-03-01 – 2025-03-31 ▾` |
+| Your own range | `5 Range` / `5 2025-03-01 – 2025-03-31 ▾` |
 
-- The **tag** filter (`6 Tag: <name> ▾`) stays when you change the period.
+- The **tag** filter (`6 Tag`, or `6 meetings ▾` once a tag is selected) stays when you change the period.
 - Choosing `3` or `4` directly always goes back to the *current* month or
   year.
 - The month list always opens on the year being shown, so you can pick a

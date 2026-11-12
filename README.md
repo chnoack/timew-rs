@@ -11,24 +11,27 @@ browsing that data.
 
 ```
  timew-tui   ./examples/pm-2025  (read-only)
-╭───────╮ ╭─────────────╮ ╭─────────────╮ ╭────────╮ ╭──────────╮   ╭──────────────╮
-│ 1 Day │ │ 2 Yesterday │ │ 3 2025-03 ▾ │ │ 4 Year │ │ 5 Range… │   │ 6 Tag: all ▾ │
-╰───────╯ ╰─────────────╯ ╰─────────────╯ ╰────────╯ ╰──────────╯   ╰──────────────╯
-╭ Summary · Month · 2025-03-01 – 2025-03-31 ──────────────────────────╮╭ Entry details ──────────────────────────────╮
-│                                                                     █│                                             │
-│  Wk  Date       Day Tags            Start      End    Time   Total  ║│  ID         @2047                           │
-│  W10 2025-03-03 Mon budget        8:50:00  9:20:00 0:30:00          ║│  Tags        budget                         │
-│                     stakeholders  9:20:00 10:20:00 1:00:00          ║│  Annotation (none)                          │
-│                     meetings     10:20:00 11:20:00 1:00:00          ║│                                             │
-│                     risks        11:20:00 12:25:00 1:05:00          ║│  Day        Monday                          │
-│                     meetings     12:55:00 14:55:00 2:00:00          ║│  Week       W10 2025                        │
-│                     reporting    14:55:00 15:40:00 0:45:00          ║│  Start      2025-03-03 Mon 08:50:00         │
-│                     meetings     15:40:00 15:55:00 0:15:00          ║│  End        2025-03-03 Mon 09:20:00         │
-│                     email        15:55:00 16:50:00 0:55:00 7:30:00  ║│  Duration   0:30:00                         │
-│  W10 2025-03-04 Tue team          7:20:00  7:50:00 0:30:00          ║│                                             │
-╰─────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────╯
- Total 167:40:00  ·  21 days  ·  206 intervals  ·  avg/day 7:59:02  ·  row 1/206
- ↑↓ move  PgUp/Dn page  1-4 range  ⇧3/⇧4 pick  c custom  t tag  r reload  q quit
+╭───────╮ ╭─────────────╮ ╭─────────────╮ ╭────────╮ ╭─────────╮   ╭───────╮
+│ 1 Day │ │ 2 Yesterday │ │ 3 2025-03 ▾ │ │ 4 Year │ │ 5 Range │   │ 6 Tag │
+╰───────╯ ╰─────────────╯ ╰─────────────╯ ╰────────╯ ╰─────────╯   ╰───────╯
+╭ Summary · Month · 2025-03-01 – 2025-03-31 ───────────────╮╭ Entry details ───────────────────────────╮
+│                                                          █│                                          │
+│  Wk  Date       Day Tags         Start   End Time Total  ║│  ID         @2047                        │
+│  W10 2025-03-03 Mon budget        8:50  9:20 0:30        ║│  Tags        budget                      │
+│                     stakeholders  9:20 10:20 1:00        ║│  Annotation (none)                       │
+│                     meetings     10:20 11:20 1:00        ║│                                          │
+│                     risks        11:20 12:25 1:05        ║│  Day        Monday                       │
+│                     meetings     12:55 14:55 2:00        ║│  Week       W10 2025                     │
+│                     reporting    14:55 15:40 0:45        ║│  Start      2025-03-03 Mon 08:50         │
+│                     meetings     15:40 15:55 0:15        ║│  End        2025-03-03 Mon 09:20         │
+│                     email        15:55 16:50 0:55  7.50  ║│  Duration   0:30                         │
+│  W10 2025-03-04 Tue team          7:20  7:50 0:30        ║│                                          │
+│                     stakeholders  7:50  8:35 0:45        ║│                                          │
+│                     email         8:35  9:20 0:45        ║│                                          │
+│                     team          9:20  9:50 0:30        ║│                                          │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
+ Total 167.67 h  ·  21 days  ·  206 intervals  ·  avg/day 7.98 h  ·  row 1/206
+ ↑↓ move  PgUp/Dn page  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  r reload  q quit
 ```
 
 *timew-tui showing March 2025 of the example data.*

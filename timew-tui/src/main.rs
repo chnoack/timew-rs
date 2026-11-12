@@ -755,7 +755,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_header(frame, header, app);
     draw_filters(frame, filters, app);
-    let table_w = table_width(&app.summary);
+    // the table is at least as wide as its title, so the title is never cut off
+    let table_w = table_width(&app.summary).max(summary_title(app).width() as u16 + 4);
     app.wide = body.width >= table_w + DETAILS_MIN_WIDTH;
     let has_selection = app.selected().is_some();
     if app.wide && has_selection {
@@ -871,11 +872,41 @@ fn cells_of(r: &summary::Row) -> [String; 8] {
         r.date.clone().unwrap_or_default(),
         r.day_name.clone().unwrap_or_default(),
         r.tags.clone(),
-        r.start.clone(),
-        r.end.clone(),
-        r.time.clone(),
-        r.total.clone(),
+        without_seconds(&r.start),
+        without_seconds(&r.end),
+        without_seconds(&r.time),
+        parse_hms(&r.total).map(decimal_hours).unwrap_or_default(),
     ]
+}
+
+/// The TUI shows no seconds: turn `H:MM:SS` into `H:MM` (seconds are cut
+/// off, not rounded). Anything else, such as the `-` end of a running
+/// entry or an empty cell, is returned unchanged.
+fn without_seconds(s: &str) -> String {
+    let b = s.as_bytes();
+    let n = b.len();
+    let is_hms = n >= 7
+        && b[n - 3] == b':'
+        && b[n - 6] == b':'
+        && [n - 1, n - 2, n - 4, n - 5].iter().all(|&i| b[i].is_ascii_digit());
+    if is_hms { s[..n - 3].to_string() } else { s.to_string() }
+}
+
+/// Seconds of an `H:MM:SS` duration string (None for anything else).
+fn parse_hms(s: &str) -> Option<i64> {
+    let mut parts = s.split(':');
+    let (h, m, sec) = (parts.next()?.parse::<i64>().ok()?, parts.next()?.parse::<i64>().ok()?, parts.next()?.parse::<i64>().ok()?);
+    parts.next().is_none().then_some(h * 3600 + m * 60 + sec)
+}
+
+/// A duration as decimal hours with two places, e.g. 7:30 -> `7.50`.
+fn decimal_hours(seconds: i64) -> String {
+    format!("{:.2}", seconds as f64 / 3600.0)
+}
+
+/// A duration in seconds as `H:MM` (hours unbounded, seconds cut off).
+fn format_hm(seconds: i64) -> String {
+    format!("{}:{:02}", seconds / 3600, (seconds % 3600) / 60)
 }
 
 /// Content-driven width of each table column (max of header and cells).
@@ -938,7 +969,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(vec![label("End"), end]),
         Line::from(vec![
             label("Duration"),
-            Span::styled(summary::format_hours(iv.range.total(now)), Style::new().fg(Color::Yellow).bold()),
+            Span::styled(format_hm(iv.range.total(now)), Style::new().fg(Color::Yellow).bold()),
         ]),
     ];
     if days > 1 {
@@ -957,10 +988,10 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// "2026-11-12 Thu 08:00:00" in local time.
+/// "2026-11-12 Thu 08:00" in local time.
 fn local_datetime(epoch: i64) -> String {
     let z = jiff::Timestamp::from_second(epoch).unwrap().to_zoned(jiff::tz::TimeZone::system());
-    z.strftime("%Y-%m-%d %a %H:%M:%S").to_string()
+    z.strftime("%Y-%m-%d %a %H:%M").to_string()
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -992,12 +1023,12 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &mut App) {
     let custom_label = if app.filter == Filter::Custom {
         format!(" 5 {} ▾ ", range_label(&app.range))
     } else {
-        " 5 Range… ".to_string()
+        " 5 Range ".to_string()
     };
     buttons.push((custom_label, app.filter == Filter::Custom || app.range_input.is_some(), Button::CustomRange));
     let tag_label = match &app.tag {
-        Some(t) => format!(" 6 Tag: {t} ▾ "),
-        None => " 6 Tag: all ▾ ".to_string(),
+        Some(t) => format!(" 6 {t} ▾ "),
+        None => " 6 Tag ".to_string(),
     };
     buttons.push((tag_label, app.tag.is_some() || app.picker.is_some(), Button::Tag));
 
@@ -1107,20 +1138,21 @@ fn draw_picker(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, popup, state);
 }
 
-fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
-    let title = Line::from(vec![
+/// The summary frame's title, e.g. " Summary · Month · 2026-11-01 – 2026-11-30 · tag meetings ".
+fn summary_title(app: &App) -> Line<'static> {
+    let mut spans = vec![
         Span::raw(" Summary · "),
         Span::styled(app.filter.label(), Style::new().fg(ACCENT).bold()),
         Span::raw(format!(" · {} ", range_label(&app.range))),
-    ]);
-    let title = match &app.tag {
-        Some(tag) => {
-            let mut spans = title.spans;
-            spans.extend([Span::raw("· tag "), Span::styled(tag.clone(), Style::new().fg(ACCENT).bold()), Span::raw(" ")]);
-            Line::from(spans)
-        }
-        None => title,
-    };
+    ];
+    if let Some(tag) = &app.tag {
+        spans.extend([Span::raw("· tag "), Span::styled(tag.clone(), Style::new().fg(ACCENT).bold()), Span::raw(" ")]);
+    }
+    Line::from(spans)
+}
+
+fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
+    let title = summary_title(app);
     let block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).padding(PAD);
 
     if let Some(err) = &app.error {
@@ -1194,14 +1226,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let days = app.summary.rows.iter().filter(|r| r.date.is_some()).count();
     let intervals = app.summary.rows.len();
     let total = app.summary.grand_total;
-    let avg = if days > 0 { summary::format_hours(total / days as i64) } else { "-".into() };
+    let avg = if days > 0 { format!("{} h", decimal_hours(total / days as i64)) } else { "-".into() };
     let pos = match app.table.selected() {
         Some(i) if intervals > 0 => format!("row {}/{}", i + 1, intervals),
         _ => String::new(),
     };
     let line = Line::from(vec![
         Span::raw(" Total "),
-        Span::styled(summary::format_hours(total), Style::new().fg(Color::Yellow).bold()),
+        Span::styled(format!("{} h", decimal_hours(total)), Style::new().fg(Color::Yellow).bold()),
         Span::raw(format!(
             "  ·  {days} {}  ·  {intervals} {}  ·  avg/day ",
             if days == 1 { "day" } else { "days" },
@@ -1227,9 +1259,9 @@ fn draw_help(frame: &mut Frame, area: Rect, wide: bool) {
         Span::raw(" range  "),
         key("⇧3/⇧4"),
         Span::raw(" pick  "),
-        key("c"),
-        Span::raw(" custom  "),
-        key("t"),
+        key("5"),
+        Span::raw(" range  "),
+        key("6"),
         Span::raw(" tag  "),
     ];
     if !wide {
@@ -1354,7 +1386,7 @@ mod tests {
     }
 
     fn render(app: &mut App) -> String {
-        render_at(app, 100, 24)
+        render_at(app, 90, 24)
     }
 
     fn render_at(app: &mut App, width: u16, height: u16) -> String {
@@ -1390,15 +1422,15 @@ mod tests {
         let day = render(&mut app);
         println!("{day}");
         assert!(day.contains("meetings") && day.contains("email") && !day.contains("planning"));
-        assert!(day.contains("Total 3:00:00"));
+        assert!(day.contains("Total 3.00 h"));
 
         press(&mut app, '2');
         let yday = render(&mut app);
         assert!(yday.contains("planning") && !yday.contains("meetings"));
-        assert!(yday.contains("Total 4:00:00"));
+        assert!(yday.contains("Total 4.00 h"));
 
         press(&mut app, '4');
-        assert!(render(&mut app).contains("Total 7:00:00"));
+        assert!(render(&mut app).contains("Total 7.00 h"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1446,7 +1478,8 @@ mod tests {
         assert!(app.details);
         let first = render(&mut app);
         println!("{first}");
-        assert!(first.contains("Entry details") && first.contains("planning") && first.contains("4:00:00"));
+        assert!(first.contains("Entry details") && first.contains("planning") && first.contains("Duration   4:00"));
+        assert!(first.contains("Start      ") && !first.contains(":00:00"), "no seconds anywhere: {first}");
         assert!(first.contains("@3"));
         let start = jiff::Zoned::now().date().yesterday().unwrap();
         assert!(first.contains(&start.strftime("%A").to_string()), "weekday shown");
@@ -1454,7 +1487,7 @@ mod tests {
 
         press(&mut app, 'j');
         let second = render(&mut app);
-        assert!(second.contains("@2") && second.contains("2:00:00"));
+        assert!(second.contains("@2") && second.contains("Duration   2:00"));
 
         key(&mut app, KeyCode::Esc);
         assert!(!app.details && !app.quit, "Esc closes the details first");
@@ -1539,6 +1572,7 @@ mod tests {
         let screen = render(&mut app);
         println!("{screen}");
         assert!(screen.contains("Filter by tag") && screen.contains("All tags"));
+        assert!(screen.contains("│ 5 Range │") && screen.contains("│ 6 Tag │"), "no value shown when nothing is selected");
 
         // entry 0 = All tags, 1 = email, 2 = meetings
         press(&mut app, 'j');
@@ -1548,8 +1582,8 @@ mod tests {
         assert_eq!(app.tag.as_deref(), Some("meetings"));
         let screen = render(&mut app);
         println!("{screen}");
-        assert!(screen.contains("Tag: meetings") && screen.contains("tag meetings"));
-        assert!(screen.contains("Total 2:00:00") && !screen.contains("planning  "));
+        assert!(screen.contains("6 meetings ▾") && screen.contains("tag meetings"));
+        assert!(screen.contains("Total 2.00 h") && !screen.contains("planning  "));
 
         // the tag filter combines with the range filter
         press(&mut app, '2');
@@ -1565,7 +1599,7 @@ mod tests {
         key(&mut app, KeyCode::Backspace);
         assert!(app.picker.is_none());
         assert_eq!(app.tag, None);
-        assert!(render(&mut app).contains("Total 4:00:00"));
+        assert!(render(&mut app).contains("Total 4.00 h"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1679,7 +1713,7 @@ mod tests {
         let screen = render(&mut app);
         println!("{screen}");
         assert!(screen.contains(&format!("5 {yesterday} ▾")));
-        assert!(screen.contains("Summary · Range") && screen.contains("Total 4:00:00"));
+        assert!(screen.contains("Summary · Range") && screen.contains("Total 4.00 h"));
 
         // reopening shows what was typed; Esc cancels without changes
         press(&mut app, 'c');
@@ -1691,7 +1725,7 @@ mod tests {
         // custom range combines with the tag filter, presets still work
         press(&mut app, '1');
         assert_eq!(app.filter, Filter::Day);
-        assert!(render(&mut app).contains("Total 3:00:00"));
+        assert!(render(&mut app).contains("Total 3.00 h"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1878,6 +1912,30 @@ mod tests {
         press(&mut app, '4');
         assert_eq!(app.year, None);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn seconds_are_not_shown() {
+        assert_eq!(without_seconds("8:50:00"), "8:50");
+        assert_eq!(without_seconds("10:20:59"), "10:20");
+        assert_eq!(without_seconds("2086:35:00"), "2086:35");
+        assert_eq!(without_seconds("-"), "-");
+        assert_eq!(without_seconds(""), "");
+        assert_eq!(format_hm(0), "0:00");
+        assert_eq!(format_hm(7 * 3600 + 59 * 60 + 2), "7:59");
+        assert_eq!(format_hm(2086 * 3600 + 35 * 60), "2086:35");
+    }
+
+    #[test]
+    fn totals_are_decimal_hours() {
+        assert_eq!(parse_hms("7:30:00"), Some(7 * 3600 + 30 * 60));
+        assert_eq!(parse_hms("2086:35:00"), Some(2086 * 3600 + 35 * 60));
+        assert_eq!(parse_hms(""), None);
+        assert_eq!(parse_hms("-"), None);
+        assert_eq!(decimal_hours(7 * 3600 + 30 * 60), "7.50");
+        assert_eq!(decimal_hours(8 * 3600 + 25 * 60), "8.42");
+        assert_eq!(decimal_hours(2086 * 3600 + 35 * 60), "2086.58");
+        assert_eq!(decimal_hours(0), "0.00");
     }
 
     #[test]
