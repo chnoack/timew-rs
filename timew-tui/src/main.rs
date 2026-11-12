@@ -258,6 +258,12 @@ struct App {
     details: bool,
     /// Whether the last draw used the wide (side-by-side) layout.
     wide: bool,
+    /// Whether the hours-per-tag bar chart is shown (in place of the details).
+    chart: bool,
+    /// Open key legend (`?`), with its scroll offset in lines.
+    legend: Option<u16>,
+    /// Lines of the legend that fit on screen at the last draw (page size).
+    legend_page: u16,
     /// Screen area of the summary table from the last draw (for mouse clicks).
     table_area: Rect,
     /// Screen areas of the filter buttons from the last draw (for mouse clicks).
@@ -294,6 +300,9 @@ impl App {
             table: TableState::default(),
             details: false,
             wide: false,
+            chart: false,
+            legend: None,
+            legend_page: 10,
             table_area: Rect::default(),
             buttons: Vec::new(),
             page: 10,
@@ -356,7 +365,13 @@ impl App {
 
     fn toggle_details(&mut self) {
         if !self.wide {
-            self.details = !self.details && self.selected().is_some();
+            if self.chart {
+                // the bottom panel shows the chart: switch it to the details
+                self.chart = false;
+                self.details = self.selected().is_some();
+            } else {
+                self.details = !self.details && self.selected().is_some();
+            }
         }
     }
 
@@ -554,6 +569,9 @@ impl App {
             self.quit = true;
             return;
         }
+        if self.legend.is_some() {
+            return self.on_legend_key(key);
+        }
         if self.picker.is_some() {
             return self.on_picker_key(key);
         }
@@ -568,7 +586,10 @@ impl App {
         }
         let page = self.page.max(1) as isize;
         match key.code {
+            KeyCode::Esc if self.chart && !self.wide => self.chart = false,
             KeyCode::Esc if self.details && !self.wide => self.details = false,
+            // the wide layout always shows the chart; b toggles it in the narrow one
+            KeyCode::Char('b') if !self.wide => self.chart = !self.chart,
             KeyCode::Enter | KeyCode::Char('i') => self.toggle_details(),
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
@@ -592,13 +613,44 @@ impl App {
             KeyCode::Left | KeyCode::BackTab | KeyCode::Char('h') => self.set_filter(self.filter.cycle(-1)),
             KeyCode::Char('5') | KeyCode::Char('c') => self.open_range_input(),
             KeyCode::Char('6') | KeyCode::Char('t') => self.open_picker(),
+            KeyCode::Char('?') => self.legend = Some(0),
             KeyCode::Char('r') => self.load(),
+            _ => {}
+        }
+    }
+
+    fn legend_scroll(&mut self, delta: i32) {
+        if let Some(offset) = &mut self.legend {
+            let max = legend_lines().len().saturating_sub(self.legend_page as usize) as i32;
+            *offset = (*offset as i32 + delta).clamp(0, max) as u16;
+        }
+    }
+
+    fn on_legend_key(&mut self, key: KeyEvent) {
+        let page = self.legend_page.max(1) as i32;
+        match key.code {
+            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => self.legend = None,
+            KeyCode::Down | KeyCode::Char('j') => self.legend_scroll(1),
+            KeyCode::Up | KeyCode::Char('k') => self.legend_scroll(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.legend_scroll(page),
+            KeyCode::PageUp => self.legend_scroll(-page),
+            KeyCode::Home | KeyCode::Char('g') => self.legend_scroll(i32::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => self.legend_scroll(i32::MAX / 2),
             _ => {}
         }
     }
 
     fn on_mouse(&mut self, mouse: MouseEvent) {
         let pos = Position::new(mouse.column, mouse.row);
+        if self.legend.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.legend_scroll(3),
+                MouseEventKind::ScrollUp => self.legend_scroll(-3),
+                MouseEventKind::Down(_) => self.legend = None,
+                _ => {}
+            }
+            return;
+        }
         if self.picker.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollDown => self.picker_move(1),
@@ -719,6 +771,31 @@ impl App {
 const ACCENT: Color = Color::Cyan;
 /// Wk/Date/Day colors, alternating from one ISO week to the next.
 const WEEK_COLORS: [Color; 2] = [Color::Cyan, Color::Magenta];
+/// Colors for the tags in the chart, assigned in alphabetical tag order.
+const TAG_COLORS: [Color; 12] = [
+    Color::Cyan,
+    Color::Magenta,
+    Color::Green,
+    Color::Blue,
+    Color::Red,
+    Color::Yellow,
+    Color::LightCyan,
+    Color::LightMagenta,
+    Color::LightGreen,
+    Color::LightBlue,
+    Color::LightRed,
+    Color::LightYellow,
+];
+
+/// A tag's chart color. It comes from the tag's position among all tags in
+/// the database, so a tag keeps its color when the filters change. Tags
+/// beyond the palette reuse its colors; "(no tag)" is gray.
+fn tag_color(app: &App, tag: &str) -> Color {
+    match app.all_tags.iter().position(|(t, _)| t == tag) {
+        Some(i) => TAG_COLORS[i % TAG_COLORS.len()],
+        None => Color::DarkGray,
+    }
+}
 
 /// For each summary row, 0 or 1: flips whenever the ISO week (week-year +
 /// week number) of the row's day changes, so consecutive weeks alternate.
@@ -760,10 +837,21 @@ fn draw(frame: &mut Frame, app: &mut App) {
     app.wide = body.width >= table_w + DETAILS_MIN_WIDTH;
     let has_selection = app.selected().is_some();
     if app.wide && has_selection {
-        // wide: table at its natural width, details always shown on the right
-        let [table, details] = Layout::horizontal([Constraint::Length(table_w), Constraint::Min(DETAILS_MIN_WIDTH)]).areas(body);
+        // wide: table at its natural width; on the right the details, with the chart below
+        let [table, side] = Layout::horizontal([Constraint::Length(table_w), Constraint::Min(DETAILS_MIN_WIDTH)]).areas(body);
         draw_summary(frame, table, app);
+        let [details, chart] = Layout::vertical([Constraint::Length(DETAILS_HEIGHT), Constraint::Min(0)]).areas(side);
         draw_details(frame, details, app);
+        // the chart needs room for its frame, padding and at least one bar
+        if chart.height >= 3 + PAD.top + PAD.bottom {
+            draw_chart(frame, chart, app);
+        }
+    } else if !app.wide && app.chart && has_selection {
+        // narrow: the chart below the table
+        let h = chart_height(&tag_totals(app));
+        let [table, chart] = Layout::vertical([Constraint::Min(5), Constraint::Length(h)]).areas(body);
+        draw_summary(frame, table, app);
+        draw_chart(frame, chart, app);
     } else if !app.wide && app.details && has_selection {
         // narrow: details below the table, only after Enter
         let [table, details] = Layout::vertical([Constraint::Min(5), Constraint::Length(DETAILS_HEIGHT)]).areas(body);
@@ -778,6 +866,123 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_range_input(frame, body, app);
     draw_month_picker(frame, body, app);
     draw_year_picker(frame, body, app);
+    draw_legend(frame, frame.area(), app);
+}
+
+/// Hours per tag over the rows currently in the list, largest first (ties by
+/// name). An entry with several tags counts fully for each of them; entries
+/// without tags are collected under "(no tag)". Uses each row's own (per-day,
+/// range-clipped) time, so the numbers match the table.
+fn tag_totals(app: &App) -> Vec<(String, i64)> {
+    let mut totals = std::collections::BTreeMap::<String, i64>::new();
+    for row in &app.summary.rows {
+        let secs = parse_hms(&row.time).unwrap_or(0);
+        let tags = &app.tracked[row.source].interval.tags;
+        if tags.is_empty() {
+            *totals.entry("(no tag)".to_string()).or_default() += secs;
+        }
+        for tag in tags {
+            *totals.entry(tag.clone()).or_default() += secs;
+        }
+    }
+    let mut v: Vec<_> = totals.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+/// Most bars shown in the bottom (narrow-layout) chart panel.
+const CHART_MAX_BARS: usize = 10;
+
+/// Height of the bottom chart panel for `totals`.
+fn chart_height(totals: &[(String, i64)]) -> u16 {
+    let bars = totals.len().clamp(1, CHART_MAX_BARS) as u16;
+    // bars + an "… more" line if cut off + blank + total line + borders + padding
+    let more = u16::from(totals.len() > CHART_MAX_BARS);
+    bars + more + 2 + 2 + PAD.top + PAD.bottom
+}
+
+/// A bar of `width` cells filled to `frac` (0..=1), using eighth blocks.
+fn bar(frac: f64, width: usize) -> String {
+    const PARTS: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+    let eighths = (frac.clamp(0.0, 1.0) * width as f64 * 8.0).round() as usize;
+    let mut s = "█".repeat(eighths / 8);
+    if eighths % 8 > 0 {
+        s.push(PARTS[eighths % 8]);
+    }
+    s
+}
+
+fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
+    let totals = tag_totals(app);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title_bottom(if app.wide { Line::raw("") } else { Line::from(" b/Esc close ").right_aligned().dim() })
+        .padding(PAD);
+    let inner = block.inner(area);
+
+    // Fit the bars into the panel: all bars plus the total line if possible,
+    // else without the total, else as many bars as fit plus a "… more" line.
+    let avail = inner.height as usize;
+    let limit = if app.wide { usize::MAX } else { CHART_MAX_BARS };
+    let n = totals.len();
+    let fits = |bars: usize, more: bool, total: bool| bars + usize::from(more) + 2 * usize::from(total) <= avail;
+    let (shown, show_total) = if n <= limit && fits(n, false, true) {
+        (n, true)
+    } else if n > limit && fits(limit, true, true) {
+        (limit, true)
+    } else if n <= limit && fits(n, false, false) {
+        (n, false)
+    } else {
+        (avail.saturating_sub(1).min(limit), false)
+    };
+    // the number of tags only matters when not all of them are shown
+    let block = if shown < n {
+        block.title(format!(" Hours per tag · {n} "))
+    } else {
+        block.title(" Hours per tag ")
+    };
+    let max = totals.first().map_or(0, |t| t.1).max(1);
+    let sum: i64 = app.summary.grand_total;
+    let name_w = totals.iter().take(shown).map(|(t, _)| t.chars().count()).max().unwrap_or(0);
+    let value_w = totals.iter().take(shown).map(|(_, s)| decimal_hours(*s).len()).max().unwrap_or(4);
+    // "name  ███  12.50 h   42 %": name + 2, bar, 2 + value + " h", 2 + pct(3) + " %"
+    let fixed = name_w + 2 + (2 + value_w + 2) + (2 + 3 + 2);
+    let bar_w = (inner.width as usize).saturating_sub(fixed).max(1);
+
+    let mut lines: Vec<Line> = totals
+        .iter()
+        .take(shown)
+        .map(|(tag, secs)| {
+            let pct = if sum > 0 { *secs as f64 * 100.0 / sum as f64 } else { 0.0 };
+            Line::from(vec![
+                Span::styled(format!("{tag:<name_w$}  "), Style::new().fg(tag_color(app, tag))),
+                Span::styled(format!("{:<bar_w$}", bar(*secs as f64 / max as f64, bar_w)), Style::new().fg(tag_color(app, tag))),
+                Span::styled(format!("  {:>value_w$} h", decimal_hours(*secs)), Style::new().fg(Color::Yellow).bold()),
+                Span::styled(format!("  {pct:>3.0} %"), Style::new().dim()),
+            ])
+        })
+        .collect();
+    if shown < totals.len() {
+        let rest: i64 = totals[shown..].iter().map(|t| t.1).sum();
+        lines.push(Line::styled(
+            format!("… {} more tags, {} h", totals.len() - shown, decimal_hours(rest)),
+            Style::new().dim(),
+        ));
+    }
+    if totals.is_empty() {
+        lines.push(Line::styled("No entries.", Style::new().dim()));
+    }
+    if show_total {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("Total ", Style::new().dim()),
+            Span::styled(format!("{} h", decimal_hours(sum)), Style::new().fg(Color::Yellow).bold()),
+        ]));
+    }
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn draw_year_picker(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -1247,34 +1452,129 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_help(frame: &mut Frame, area: Rect, wide: bool) {
-    let key = |k: &'static str| Span::styled(k, Style::new().fg(ACCENT).bold());
-    let mut spans = vec![
-        Span::raw(" "),
-        key("↑↓"),
-        Span::raw(" move  "),
-        key("PgUp/Dn"),
-        Span::raw(" page  "),
-
-        key("1-4"),
-        Span::raw(" range  "),
-        key("⇧3/⇧4"),
-        Span::raw(" pick  "),
-        key("5"),
-        Span::raw(" range  "),
-        key("6"),
-        Span::raw(" tag  "),
+    let mut items: Vec<(&str, &str)> = vec![
+        ("↑↓", "move"),
+        ("1-4", "range"),
+        ("⇧3/⇧4", "pick"),
+        ("5", "range"),
+        ("6", "tag"),
     ];
     if !wide {
-        spans.extend([key("Enter"), Span::raw(" details  ")]);
+        items.extend([("b", "chart"), ("Enter", "details")]);
     }
-    spans.extend([
-        key("r"),
-        Span::raw(" reload  "),
-        key("q"),
-        Span::raw(" quit"),
-    ]);
-    let line = Line::from(spans).dim();
-    frame.render_widget(Paragraph::new(line), area);
+    items.extend([("PgUp/Dn", "page"), ("r", "reload")]);
+
+    // Keep "q quit" at the end. If not everything fits, put "? help" (the
+    // full key legend) first and drop items from the end until it fits.
+    let width = |k: &str, l: &str| k.chars().count() + 1 + l.chars().count() + 2;
+    let all: usize = items.iter().map(|(k, l)| width(k, l)).sum();
+    let tail = [("q", "quit")];
+    if 1 + all + width("q", "quit") > area.width as usize {
+        items.insert(0, ("?", "help"));
+    }
+    let tail_w: usize = tail.iter().map(|(k, l)| width(k, l)).sum();
+    let mut room = (area.width as usize).saturating_sub(1 + tail_w);
+    let mut spans = vec![Span::raw(" ")];
+    for (k, l) in items {
+        let w = width(k, l);
+        if w > room {
+            break;
+        }
+        room -= w;
+        spans.extend([Span::styled(k, Style::new().fg(ACCENT).bold()), Span::raw(format!(" {l}  "))]);
+    }
+    for (i, (k, l)) in tail.iter().enumerate() {
+        let sep = if i + 1 < tail.len() { "  " } else { "" };
+        spans.extend([Span::styled(*k, Style::new().fg(ACCENT).bold()), Span::raw(format!(" {l}{sep}"))]);
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans).dim()), area);
+}
+
+/// The key legend shown by `?`: section headings (`None` key) and key rows.
+fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
+    let h = |t| (None, t);
+    let k = |k, t| (Some(k), t);
+    vec![
+        h("Moving"),
+        k("↑ ↓  k j", "previous / next row"),
+        k("PgUp PgDn  Space", "page up / down"),
+        k("Home End  g G", "first / last row"),
+        k("mouse wheel", "scroll"),
+        k("click a row", "select it (again: details, narrow window)"),
+        h("Periods"),
+        k("1  d", "today"),
+        k("2  y", "yesterday"),
+        k("3  m", "current month"),
+        k("⇧3  § #  M", "pick a month of the shown year"),
+        k("4  Y", "current year"),
+        k("⇧4  $", "pick one of the last 5 years"),
+        k("← →  h l  Tab", "previous / next of the four periods"),
+        k("5  c", "your own date range (From / To)"),
+        k("right-click 3 / 4", "month / year list"),
+        h("Filter by tag"),
+        k("6  t", "tag list"),
+        h("Panels"),
+        k("Enter  i", "details (narrow window)"),
+        k("b", "hours-per-tag chart (narrow window)"),
+        k("Esc", "close the chart / details (narrow window)"),
+        h("In lists and the date form"),
+        k("↑ ↓  j k", "move"),
+        k("← →", "change the year (month list)"),
+        k("Enter  Space", "select / apply"),
+        k("⌫", "back to current month / year, no tag filter"),
+        k("Tab", "switch From / To (date form)"),
+        k("Ctrl+U", "clear the field (date form)"),
+        k("Esc", "close without changes"),
+        h("Other"),
+        k("r", "reload from disk"),
+        k("?", "this legend"),
+        k("q  Esc", "quit"),
+        k("Ctrl+C", "quit, from anywhere"),
+    ]
+}
+
+fn draw_legend(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(offset) = app.legend else { return };
+    let entries = legend_lines();
+    let key_w = entries.iter().filter_map(|(k, _)| k.map(|k| k.chars().count())).max().unwrap_or(0);
+    let lines: Vec<Line> = entries
+        .iter()
+        .map(|(key, text)| match key {
+            None => Line::styled(*text, Style::new().fg(ACCENT).bold().underlined()),
+            Some(key) => Line::from(vec![
+                Span::styled(format!("  {key:<key_w$}  "), Style::new().fg(Color::Yellow).bold()),
+                Span::raw(*text),
+            ]),
+        })
+        .collect();
+
+    let text_w = entries.iter().map(|(_, t)| t.chars().count()).max().unwrap_or(0);
+    let w = (2 + key_w + 2 + text_w) as u16 + PAD.left + PAD.right + 2;
+    let w = w.min(area.width.saturating_sub(2)).max(1);
+    let h = (lines.len() as u16 + 2 + PAD.top + 1).min(area.height.saturating_sub(2)).max(1);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Keys ")
+        .title_bottom(Line::from(" ↑↓ scroll · ?/Esc close ").right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    let inner = block.inner(popup);
+    app.legend_page = inner.height;
+    let max = lines.len().saturating_sub(inner.height as usize) as u16;
+    let offset = offset.min(max);
+    app.legend = Some(offset);
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).scroll((offset, 0)).block(block), popup);
+    if max > 0 {
+        let mut sb = ScrollbarState::new(max as usize + 1).position(offset as usize);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None),
+            popup.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+            &mut sb,
+        );
+    }
 }
 
 /// Local calendar date of an epoch, as `YYYY-MM-DD`.
@@ -1936,6 +2236,216 @@ mod tests {
         assert_eq!(decimal_hours(8 * 3600 + 25 * 60), "8.42");
         assert_eq!(decimal_hours(2086 * 3600 + 35 * 60), "2086.58");
         assert_eq!(decimal_hours(0), "0.00");
+    }
+
+    #[test]
+    fn bar_chart_of_hours_per_tag() {
+        let root = sample_db("chart");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        assert_eq!(
+            tag_totals(&app),
+            vec![("planning".into(), 4 * 3600), ("meetings".into(), 2 * 3600), ("email".into(), 3600)]
+        );
+
+        // wide: the chart is always shown, below the details on the right
+        let screen = render_at(&mut app, 140, 34);
+        println!("{screen}");
+        let title = screen.lines().find(|l| l.contains("Summary · Year")).unwrap();
+        assert!(title.contains("Entry details"));
+        let lines: Vec<&str> = screen.lines().collect();
+        let row = |s: &str| lines.iter().position(|l| l.contains(s)).unwrap();
+        assert!(row("Hours per tag ─") > row("Duration"), "chart below the details");
+        assert!(!screen.contains("Hours per tag ·"), "all tags shown: no count");
+        // b and Esc don't hide it in the wide layout; Esc quits
+        press(&mut app, 'b');
+        assert!(render_at(&mut app, 140, 34).contains("Hours per tag"));
+        let planning = chart_line(&screen, "planning");
+        assert!(planning.contains("4.00 h") && planning.contains("57 %"));
+        assert!(screen.contains("Total 7.00 h"));
+        // the longest bar belongs to the largest tag
+        let bar_len = |tag: &str| chart_line(&screen, tag).matches('█').count();
+        assert!(bar_len("planning") > bar_len("meetings") && bar_len("meetings") > bar_len("email"));
+
+        // the chart follows the filters
+        press(&mut app, '1');
+        assert_eq!(tag_totals(&app), vec![("meetings".into(), 2 * 3600), ("email".into(), 3600)]);
+        assert!(chart_line(&render_at(&mut app, 140, 34), "email").contains('█'));
+
+        // narrow: b shows the chart below the table; Esc closes it, Enter switches to details
+        render(&mut app); // the window is now narrow
+        assert!(!app.wide && !render(&mut app).contains("Hours per tag"));
+        press(&mut app, 'b');
+        let screen = render(&mut app);
+        println!("{screen}");
+        let title = screen.lines().find(|l| l.contains("Summary · Day")).unwrap();
+        assert!(!title.contains("Hours per tag") && screen.contains("Hours per tag ─"));
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.chart && !app.quit);
+        press(&mut app, 'b');
+        key(&mut app, KeyCode::Enter);
+        assert!(!app.chart && app.details);
+        assert!(render(&mut app).contains("Entry details"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The chart's line for `tag` (the part right of the summary table, if any).
+    fn chart_line(screen: &str, tag: &str) -> String {
+        screen
+            .lines()
+            .map(|l| l.rsplit("││").next().unwrap_or(l))
+            .find(|l| l.contains(tag) && l.contains('█'))
+            .unwrap_or_else(|| panic!("no chart bar for {tag}:\n{screen}"))
+            .to_string()
+    }
+
+    #[test]
+    fn tags_have_stable_distinct_colors() {
+        let root = sample_db("colors");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        let colors: Vec<Color> = ["email", "meetings", "planning"].iter().map(|t| tag_color(&app, t)).collect();
+        assert_eq!(colors, vec![TAG_COLORS[0], TAG_COLORS[1], TAG_COLORS[2]]);
+        assert_eq!(tag_color(&app, "(no tag)"), Color::DarkGray);
+        // a filter doesn't change a tag's color
+        press(&mut app, '1');
+        assert_eq!(tag_color(&app, "meetings"), TAG_COLORS[1]);
+        // the bars are drawn in those colors
+        let mut terminal = Terminal::new(TestBackend::new(140, 34)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let bar_color = |tag: &str| {
+            let line = |y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let y = (0..buf.area.height).find(|&y| line(y).contains('█') && line(y).contains(tag)).unwrap();
+            let x = (0..buf.area.width).find(|&x| buf[(x, y)].symbol() == "█").unwrap();
+            buf[(x, y)].fg
+        };
+        assert_eq!(bar_color("meetings"), TAG_COLORS[1]);
+        assert_eq!(bar_color("email"), TAG_COLORS[0]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn wide_chart_shrinks_in_low_windows() {
+        let root = sample_db("low");
+        let mut app = App::new(root.clone());
+        press(&mut app, '4');
+        // room for everything
+        let screen = render_at(&mut app, 140, 27);
+        assert!(chart_line(&screen, "email").contains('█') && screen.contains("Total 7.00 h  "));
+        // enough for the three bars, not for the total line
+        let screen = render_at(&mut app, 140, 25);
+        println!("{screen}");
+        assert!(chart_line(&screen, "email").contains('█'));
+        assert!(!screen.lines().any(|l| l.contains("││  Total")));
+        // one bar and a "more" line
+        let screen = render_at(&mut app, 140, 24);
+        println!("{screen}");
+        assert!(chart_line(&screen, "planning").contains('█'));
+        assert!(screen.contains("… 2 more tags, 3.00 h"));
+        assert!(screen.contains("Hours per tag · 3"), "count shown when tags are cut off");
+        // too low for the chart: details only
+        let screen = render_at(&mut app, 140, 22);
+        assert!(screen.contains("Entry details") && !screen.contains("Hours per tag"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tag_totals_count_each_tag_and_untagged_entries() {
+        let root = env::temp_dir().join(format!("timew-tui-test-multitag-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data")).unwrap();
+        let tz = jiff::tz::TimeZone::system();
+        let today = jiff::Zoned::now().date();
+        let at = |h: i8| timew_rs::interval::format_iso(today.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
+        let lines = format!("inc {} - {} # a b\ninc {} - {}\n", at(8), at(10), at(10), at(11));
+        fs::write(root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month())), lines).unwrap();
+        let mut app = App::new(root.clone());
+        press(&mut app, '1');
+        assert_eq!(
+            tag_totals(&app),
+            vec![("a".into(), 7200), ("b".into(), 7200), ("(no tag)".into(), 3600)]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bars_use_eighth_blocks() {
+        assert_eq!(bar(1.0, 4), "████");
+        assert_eq!(bar(0.5, 4), "██");
+        assert_eq!(bar(0.0, 4), "");
+        assert_eq!(bar(1.0 / 32.0, 4), "▏");
+        assert_eq!(bar(0.5 + 1.0 / 16.0, 4), "██▎"); // 2.25 cells
+        assert_eq!(bar(0.625, 4), "██▌"); // 2.5 cells
+    }
+
+    #[test]
+    fn help_line_always_ends_with_quit() {
+        let root = sample_db("help");
+        let mut app = App::new(root.clone());
+        for w in [40u16, 60, 90, 140] {
+            let screen = render_at(&mut app, w, 24);
+            let help = screen.lines().last().unwrap();
+            assert!(help.ends_with("q quit"), "width {w}: {help}");
+            assert!(help.chars().count() <= w as usize);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn question_mark_opens_the_key_legend() {
+        let root = sample_db("legend");
+        let mut app = App::new(root.clone());
+
+        press(&mut app, '?');
+        assert_eq!(app.legend, Some(0));
+        let screen = render_at(&mut app, 100, 50);
+        println!("{screen}");
+        assert!(screen.contains(" Keys ") && screen.contains("Periods") && screen.contains("hours-per-tag chart"));
+        // every line fits at this height: no scrolling
+        press(&mut app, 'j');
+        render_at(&mut app, 100, 50);
+        assert_eq!(app.legend, Some(0));
+
+        // the legend takes all keys: these don't change the filter or quit
+        press(&mut app, '1');
+        assert_eq!(app.filter, Filter::Month);
+        key(&mut app, KeyCode::Esc);
+        assert!(app.legend.is_none() && !app.quit);
+
+        // in a small window it scrolls, and the offset is clamped
+        press(&mut app, '?');
+        let screen = render_at(&mut app, 60, 20);
+        println!("{screen}");
+        assert!(screen.contains("Moving") && !screen.contains("Ctrl+C"));
+        press(&mut app, 'G');
+        let screen = render_at(&mut app, 60, 20);
+        println!("{screen}");
+        assert!(screen.contains("Ctrl+C") && !screen.contains("Moving"));
+        press(&mut app, 'g');
+        assert_eq!(app.legend, Some(0));
+        press(&mut app, '?');
+        assert!(app.legend.is_none());
+
+        // a click anywhere closes it
+        press(&mut app, '?');
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 0, row: 0, modifiers: KeyModifiers::NONE });
+        assert!(app.legend.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn footer_offers_help_only_when_cut_off() {
+        let root = sample_db("footer-help");
+        let mut app = App::new(root.clone());
+        let footer = |app: &mut App, w| render_at(app, w, 34).lines().last().unwrap().to_string();
+        let wide = footer(&mut app, 140);
+        assert!(wide.contains("r reload") && !wide.contains("? help"), "{wide}");
+        for w in [20u16, 40, 60, 90] {
+            let narrow = footer(&mut app, w);
+            assert!(narrow.starts_with(" ? help  ") && narrow.ends_with("q quit"), "width {w}: {narrow}");
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

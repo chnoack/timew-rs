@@ -33,7 +33,7 @@ shows changes made by `timew` while the TUI is running.
 │  W46 2026-11-11 Wed planning  8:00 12:00 4:00 … ││  Tags        planning     │
 ╰─────────────────────────────────────────────────╯╰───────────────────────────╯
  Total 7.00 h  ·  2 days  ·  3 intervals  ·  avg/day 3.50 h  ·  row 1/3        ← status
- ↑↓ move  PgUp/Dn page  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  …              ← help
+ ↑↓ move  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  …  q quit                 ← help
 ```
 
 - **Summary table:** columns Wk, Date, Day, Tags, Start, End, Time and Total.
@@ -48,6 +48,12 @@ shows changes made by `timew` while the TUI is running.
   **decimal hours** with two places: 7:30 is shown as `7.50`, 8:25 as
   `8.42`. `timew-rs summary` still shows `H:MM:SS` everywhere, because its
   output matches `timew`.
+- **Help line:** shows as many keys as fit the window width, and always ends
+  with `q quit`. If some keys don't fit, it starts with `? help`, so the
+  legend is always reachable.
+- **Key legend:** `?` opens a window listing every key, mouse action and
+  popup key. In a low window it scrolls (`↑↓`, `PgUp`/`PgDn`, `g`/`G`, or
+  the mouse wheel). `?`, `Esc`, `q`, `Enter` or a click closes it.
 - **Status line:** the total, the number of days with entries, the number of
   rows, the average per day with entries, and your position in the list.
 - **Average per day** counts only days that have entries.
@@ -71,6 +77,47 @@ least as wide as its title. So the switching point can move slightly between
 filters. The layout is chosen again on every redraw, so resizing the
 terminal switches immediately.
 
+### Hours-per-tag chart
+
+A **bar chart of the hours per tag**, where it appears depending on the
+window width:
+
+| Window | Chart |
+| --- | --- |
+| **Wide** | Always shown on the right, **below the details** |
+| **Narrow** | Shown below the table after `b`, in place of the details. `b` or `Esc` closes it, and `Enter` switches the panel to the details. |
+
+```
+╭ Hours per tag ───────────────────────────────────────────╮
+│  meetings      ███████████████████████  416.92 h   20 %  │
+│  planning      ████████████████▉        306.42 h   15 %  │
+│  email         ███████████████▏         275.25 h   13 %  │
+│  …                                                       │
+│  Total 2086.58 h                                         │
+╰──────────────────────────────────────────────────────────╯
+```
+
+- **What it counts:** exactly the entries in the list, so it follows the
+  period and the tag filter. The hours are taken from the table's Time
+  column, so an entry that crosses the edge of the range counts only its
+  part inside the range.
+- **Order:** largest first. The longest bar is the largest tag, and the other
+  bars are drawn to scale using eighth blocks.
+- **Several tags:** an entry with several tags counts fully for each of
+  them, so the percentages can add up to more than 100 %. Entries without a
+  tag are shown as "(no tag)". The percentages are relative to the total.
+- **Colors:** every tag has its own color, used for its name and its bar.
+  The color comes from the tag's position in the alphabetical list of all
+  tags in the database, so a tag keeps its color when you change the
+  filters. The palette has 12 colors; after that the colors repeat.
+  "(no tag)" is gray.
+- **Space:** in a narrow window, at most 10 tags are shown. In a wide window,
+  the chart uses the height left below the details. If that isn't enough
+  for every tag, the total line is dropped first, then the smallest tags are
+  summed up as "… N more tags", and the title shows the total number of
+  tags ("Hours per tag · 8"). If the window is too low for even one bar,
+  the chart is hidden.
+
 ## Keys
 
 ### Main view
@@ -81,6 +128,7 @@ terminal switches immediately.
 | `PgUp` `PgDn` / `Space` | Move a page |
 | `Home` `End` / `g` `G` | First or last row |
 | `Enter` / `i` | Open or close the details (narrow layout) |
+| `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
 | `1` / `d` | Today |
 | `2` / `y` | Yesterday |
 | `3` / `m` | The current month |
@@ -91,7 +139,8 @@ terminal switches immediately.
 | `5` / `c` | **Date range form** |
 | `6` / `t` | **Tag list** |
 | `r` | Reload from disk |
-| `q` / `Esc` | Quit (`Esc` closes the narrow details panel first) |
+| `?` | Show the **key legend** (all keys in one window) |
+| `q` / `Esc` | Quit (in the narrow layout, `Esc` closes the chart or details panel first) |
 | `Ctrl+C` | Quit, from anywhere |
 
 ### Mouse
@@ -106,7 +155,8 @@ terminal switches immediately.
 
 ### Popups
 
-While a popup is open, it receives every key; `q` doesn't quit.
+While a popup is open, it receives every key; `q` doesn't quit. The key
+legend (`?`) works the same way.
 
 | Popup | Keys |
 | --- | --- |
@@ -161,7 +211,7 @@ All state is in one `App` struct:
   after the tag filter), `summary: Summary` (rows from
   `commands::summary::build`), `all_tags` (tag and count for the whole
   database), and `error`.
-- **UI state:** the table selection (`TableState`), `details` and `wide`,
+- **UI state:** the table selection (`TableState`), `details`, `chart` and `wide`,
   and one `Option<…>` per popup (`picker`, `month_picker`, `year_picker`,
   `range_input`). `Some` means the popup is open.
 - **Hit areas for the mouse** (button, table, list and field rectangles),
@@ -200,6 +250,8 @@ Layout constants:
 | `PAD` | The space between a frame and its content (`Padding::new(2, 2, 1, 0)`) |
 | `DETAILS_MIN_WIDTH` | 44: the minimum width of the side panel |
 | `DETAILS_HEIGHT` | The height of the bottom details panel |
+| `CHART_MAX_BARS` | 10: the most bars in the bottom chart panel |
+| `TAG_COLORS` | The 12 chart colors, assigned in alphabetical tag order (`tag_color`) |
 | `WEEK_COLORS` | `[Cyan, Magenta]`, alternating per ISO week (`week_parity`) |
 | `ACCENT` | Cyan, for highlights |
 
