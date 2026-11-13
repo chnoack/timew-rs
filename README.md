@@ -149,6 +149,8 @@ A separate program for browsing the summary interactively:
 - **Filters:** quick buttons for day, yesterday, month and year, plus lists
   to pick a month (Shift+3) or one of the last 5 years (Shift+4), a form for
   your own date range (`5`), and a tag list (`6`).
+- **Tracking:** `s` starts a new entry (asking for tags and annotation)
+  or stops the running one; a running entry's details have a red border.
 - **Editing:** `e` edits the start and end date and time, the tags and the
   annotation of the selected entry in the details panel. Overlaps are refused, or adjusted with
   Shift+Enter (or Alt+Enter), and `u` undoes the last edit.

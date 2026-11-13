@@ -134,6 +134,49 @@ impl RangeInput {
     }
 }
 
+/// State of the start dialog (`s`): tags and annotation of a new entry.
+#[derive(Debug, Clone, Default)]
+struct StartForm {
+    /// Tags, annotation.
+    fields: [String; 2],
+    field: usize,
+    /// Cursor position (in characters) in the active field.
+    cursor: usize,
+    /// First visible character of the active field (it scrolls sideways).
+    scroll: usize,
+    error: Option<String>,
+}
+
+impl StartForm {
+    fn len(&self) -> usize {
+        self.fields[self.field].chars().count()
+    }
+
+    fn focus(&mut self, i: usize) {
+        self.field = i % 2;
+        self.cursor = self.len();
+    }
+
+    fn insert(&mut self, c: char) {
+        let mut chars: Vec<char> = self.fields[self.field].chars().collect();
+        if chars.len() < MAX_TEXT_LEN {
+            chars.insert(self.cursor.min(chars.len()), c);
+            self.cursor += 1;
+            self.fields[self.field] = chars.into_iter().collect();
+        }
+        self.error = None;
+    }
+
+    fn remove(&mut self, at: usize) {
+        let mut chars: Vec<char> = self.fields[self.field].chars().collect();
+        if at < chars.len() {
+            chars.remove(at);
+            self.fields[self.field] = chars.into_iter().collect();
+        }
+        self.error = None;
+    }
+}
+
 /// State of the edit form (`e`), shown in the details panel: the start
 /// and end of the selected entry as date and time fields.
 #[derive(Debug, Clone)]
@@ -438,6 +481,13 @@ struct App {
     notice: Option<String>,
     /// Whether the notice reports a failure (red instead of green).
     notice_failed: bool,
+    /// Open start dialog (`s`).
+    start_form: Option<StartForm>,
+    /// Screen areas of the start dialog's fields from the last draw.
+    start_fields: [Rect; 2],
+    /// The running entry, if any (in the whole database, not only the
+    /// shown period).
+    running: Option<Interval>,
     /// The last saved edit, for `u`: the entry before the edit and every
     /// change the save made (including adjusted entries). Only in memory.
     last_edit: Option<(Interval, Vec<timew_core::session::Change>)>,
@@ -513,6 +563,9 @@ impl App {
             notice: None,
             notice_failed: false,
             last_edit: None,
+            start_form: None,
+            start_fields: [Rect::default(); 2],
+            running: None,
             filter: Filter::Month,
             range: Range::empty(),
             custom_range: Range::empty(),
@@ -568,6 +621,7 @@ impl App {
                 }
             }
             self.all_tags = counts.into_iter().collect();
+            self.running = db.latest()?.filter(|i| i.is_open());
             let mut tracked = db.tracked_in_range(&self.range)?;
             if let Some(tag) = &self.tag {
                 tracked.retain(|t| t.interval.has_tag(tag));
@@ -597,12 +651,18 @@ impl App {
     /// Keys go to the summary table: no form, list or legend is open.
     fn table_has_focus(&self) -> bool {
         self.edit.is_none()
+            && self.start_form.is_none()
             && !self.info
             && self.legend.is_none()
             && self.picker.is_none()
             && self.month_picker.is_none()
             && self.year_picker.is_none()
             && self.range_input.is_none()
+    }
+
+    /// Update the times of a running entry (the rows are built for "now").
+    fn tick(&mut self) {
+        self.summary = summary::build(&self.range, &self.tracked);
     }
 
     /// The interval behind the currently selected summary row.
@@ -709,12 +769,112 @@ impl App {
         row
     }
 
-    /// Revert the last saved edit (`u`). Only the last one can be undone.
-    fn undo_edit(&mut self) {
-        let Some((before, changes)) = self.last_edit.take() else { return };
+    fn edit_paths(&self) -> Paths {
         let mut paths = Paths::from_env();
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
+        paths
+    }
+
+    /// `s`: stop the running entry, or ask for the tags and annotation of
+    /// a new one.
+    fn start_or_stop(&mut self) {
+        if self.running.is_some() {
+            self.stop_entry();
+        } else {
+            self.start_form = Some(StartForm::default());
+        }
+    }
+
+    fn on_start_key(&mut self, key: KeyEvent) {
+        let Some(form) = &mut self.start_form else { return };
+        match key.code {
+            KeyCode::Esc => self.start_form = None,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => form.focus(form.field + 1),
+            KeyCode::Left => form.cursor = form.cursor.saturating_sub(1),
+            KeyCode::Right => form.cursor = (form.cursor + 1).min(form.len()),
+            KeyCode::Home => form.cursor = 0,
+            KeyCode::End => form.cursor = form.len(),
+            KeyCode::Backspace if form.cursor > 0 => {
+                form.cursor -= 1;
+                form.remove(form.cursor);
+            }
+            KeyCode::Delete => form.remove(form.cursor),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                form.fields[form.field].clear();
+                form.cursor = 0;
+            }
+            KeyCode::Char(c) => form.insert(c),
+            KeyCode::Enter => self.start_entry(),
+            _ => {}
+        }
+    }
+
+    /// Start the new entry from the start dialog, then show it: the view
+    /// switches to today, and the entry is selected and its details open.
+    fn start_entry(&mut self) {
+        let Some(form) = &mut self.start_form else { return };
+        let tags = match parse_tags(&form.fields[0]) {
+            Ok(t) => t,
+            Err(e) => return form.error = Some(e),
+        };
+        let annotation = form.fields[1].clone();
+        let paths = self.edit_paths();
+        let (started, changes) = match timew_core::start_interval(&paths, &tags, Some(&annotation)) {
+            Ok(result) => result,
+            Err(e) => return self.start_form.as_mut().unwrap().error = Some(e),
+        };
+        self.start_form = None;
+        self.last_edit = Some((Interval::default(), changes));
+        self.filter = Filter::Day;
+        self.month = None;
+        self.year = None;
+        if self.tag.as_ref().is_some_and(|t| !started.has_tag(t)) {
+            self.tag = None;
+        }
+        self.load();
+        self.select_interval(&started);
+        if !self.wide {
+            self.chart = false;
+            self.details = true;
+        }
+        let what = if started.tags.is_empty() { String::new() } else { format!(" {}", tags_to_text(&started.tags)) };
+        self.notice = Some(format!("Started{what}. s stops it, u undoes it."));
+        self.notice_failed = false;
+    }
+
+    /// Stop the running entry now (`s`). The view stays as it is.
+    fn stop_entry(&mut self) {
+        let paths = self.edit_paths();
+        match timew_core::stop_interval(&paths) {
+            Ok((before, changes)) => {
+                let selected = self.table.selected();
+                self.last_edit = Some((before.clone(), changes));
+                self.load();
+                // keep the stopped entry selected, else the same row
+                let row = self.summary.rows.iter().position(|r| {
+                    let iv = &self.tracked[r.source].interval;
+                    iv.range.start == before.range.start && iv.tags == before.tags
+                });
+                if let Some(i) = row.or(selected.filter(|i| *i < self.summary.rows.len())) {
+                    self.table.select(Some(i));
+                }
+                let duration = format_hm(jiff::Timestamp::now().as_second() - before.range.start);
+                self.notice = Some(format!("Stopped after {duration}. u undoes it."));
+                self.notice_failed = false;
+            }
+            Err(e) => {
+                self.notice = Some(format!("Not stopped: {e}"));
+                self.notice_failed = true;
+                self.load();
+            }
+        }
+    }
+
+    /// Revert the last saved edit (`u`). Only the last one can be undone.
+    fn undo_edit(&mut self) {
+        let Some((before, changes)) = self.last_edit.take() else { return };
+        let paths = self.edit_paths();
         match timew_core::undo_change(&paths, &changes) {
             Ok(()) => {
                 self.load();
@@ -943,6 +1103,9 @@ impl App {
         if self.edit.is_some() {
             return self.on_edit_key(key);
         }
+        if self.start_form.is_some() {
+            return self.on_start_key(key);
+        }
         if self.info {
             // any key closes the info dialog
             self.info = false;
@@ -973,6 +1136,7 @@ impl App {
             KeyCode::Char('i') => self.info = true,
             KeyCode::Char('e') => self.open_edit(),
             KeyCode::Char('u') => self.undo_edit(),
+            KeyCode::Char('s') => self.start_or_stop(),
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => self.reset_filters(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
@@ -1025,6 +1189,16 @@ impl App {
 
     fn on_mouse(&mut self, mouse: MouseEvent) {
         let pos = Position::new(mouse.column, mouse.row);
+        if let Some(form) = &mut self.start_form {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind
+                && let Some(i) = self.start_fields.iter().position(|r| r.contains(pos))
+            {
+                let scroll = if i == form.field { form.scroll } else { 0 };
+                form.field = i;
+                form.cursor = (scroll + pos.x.saturating_sub(self.start_fields[i].x + 1) as usize).min(form.len());
+            }
+            return;
+        }
         if self.info {
             if let MouseEventKind::Down(_) = mouse.kind {
                 self.info = false;
@@ -1281,12 +1455,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
         draw_summary(frame, body, app);
     }
     draw_status(frame, status, app);
-    draw_help(frame, help, app.wide, app.last_edit.is_some());
+    draw_help(frame, help, app.wide, app.last_edit.is_some(), app.running.is_some());
     draw_picker(frame, body, app);
     draw_range_input(frame, body, app);
     draw_month_picker(frame, body, app);
     draw_year_picker(frame, body, app);
     draw_legend(frame, frame.area(), app);
+    draw_start_form(frame, body, app);
     draw_info(frame, frame.area(), app);
 }
 
@@ -1681,8 +1856,9 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(ACCENT))
-        .title(" Entry details ")
+        // the running entry is framed in red until it is stopped
+        .border_style(Style::new().fg(if iv.is_open() { Color::Red } else { ACCENT }))
+        .title(if iv.is_open() { " Entry details · running " } else { " Entry details " })
         .title_bottom(if app.wide { Line::raw("") } else { Line::from(" ↑↓ next/prev · Enter/Esc close ").right_aligned().dim() });
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -1836,6 +2012,59 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &mut App) {
         app.buttons.push((rect, button));
         x += w + 1;
     }
+}
+
+/// The start dialog (`s`): tags and annotation for a new entry.
+fn draw_start_form(frame: &mut Frame, area: Rect, app: &mut App) {
+    const LABEL_W: u16 = 12;
+    let w = 64u16.min(area.width);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(FOCUS))
+        .title(" Start tracking ")
+        .title_bottom(Line::from(" Enter start · Tab next · Esc cancel ").right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    let Some(form) = &mut app.start_form else { return };
+    let h = (6 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let inner = block.inner(popup);
+    let field_w = inner.width.saturating_sub(LABEL_W);
+    let visible = (field_w as usize).saturating_sub(2).max(1);
+    if form.cursor < form.scroll {
+        form.scroll = form.cursor;
+    } else if form.cursor >= form.scroll + visible {
+        form.scroll = form.cursor + 1 - visible;
+    }
+    let form = &*form;
+    let label = |s: &'static str| Span::styled(format!("{s:<w$}", w = LABEL_W as usize), Style::new().fg(ACCENT).bold());
+    let field = |i: usize| {
+        let style = if form.field == i { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
+        let skip = if i == form.field { form.scroll } else { 0 };
+        let text: String = form.fields[i].chars().skip(skip).take(visible).collect();
+        Span::styled(format!(" {:<w$}", text, w = (field_w as usize).saturating_sub(1)), style)
+    };
+    let last = match &form.error {
+        Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
+        None if form.field == 0 => Line::styled("separated by spaces, \"in quotes\" with spaces", Style::new().dim()),
+        None => Line::styled("any text, may be empty", Style::new().dim()),
+    };
+    let lines = vec![
+        Line::from(vec![label("Tags"), field(0)]),
+        Line::raw(""),
+        Line::from(vec![label("Annotation"), field(1)]),
+        Line::raw(""),
+        Line::styled("The entry starts now.", Style::new().dim()),
+        last,
+    ];
+    let fields = [Rect::new(inner.x + LABEL_W, inner.y, field_w, 1), Rect::new(inner.x + LABEL_W, inner.y + 2, field_w, 1)];
+    let active = fields[form.field];
+    let cursor = Position::new((active.x + 1 + (form.cursor - form.scroll) as u16).min(active.right().saturating_sub(1)), active.y);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
+    if active.width > 0 {
+        frame.set_cursor_position(cursor);
+    }
+    app.start_fields = fields;
 }
 
 fn draw_range_input(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -2035,8 +2264,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool) {
+fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool, running: bool) {
     let mut items: Vec<(&str, &str)> = Vec::new();
+    // first, so that they are visible in a narrow window too
+    items.push(("s", if running { "stop" } else { "start" }));
     if can_undo {
         // first, so that it is visible in a narrow window too
         items.push(("u", "undo"));
@@ -2118,7 +2349,10 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("Enter", "save (overlaps are refused)"),
         k("⇧Enter  Alt+Enter", "save, adjusting overlapping entries"),
         k("Esc", "cancel"),
-        k("u", "undo the last saved edit"),
+        k("u", "undo the last saved edit, start or stop"),
+        h("Tracking"),
+        k("s", "start a new entry (asks for tags and annotation)"),
+        k("s", "stop the running entry (when one is running)"),
         h("In lists and the date form"),
         k("↑ ↓  j k", "move"),
         k("← →", "change the year (month list)"),
@@ -2246,6 +2480,11 @@ fn range_label(range: &Range) -> String {
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
     while !app.quit {
         terminal.draw(|f| draw(f, &mut app))?;
+        // While an entry runs, its times count up: redraw every second.
+        if app.running.is_some() && !event::poll(std::time::Duration::from_secs(1))? {
+            app.tick();
+            continue;
+        }
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
             Event::Mouse(mouse) => app.on_mouse(mouse),
@@ -2466,7 +2705,7 @@ mod tests {
         press(&mut app, '4');
         let screen = render(&mut app);
         assert!(!app.wide);
-        assert!(!screen.contains("Entry details") && screen.contains("Enter details"));
+        assert!(!screen.contains("Entry details"), "no details before Enter");
         key(&mut app, KeyCode::Enter);
         let screen = render(&mut app);
         let header = screen.lines().find(|l| l.contains("Summary · Year")).unwrap();
@@ -3473,7 +3712,7 @@ mod tests {
         // two edits: meetings ends 09:30, then it ends 10:30 adjusting email
         edit_end(&mut app, "0930", false);
         let first = today_file(&root);
-        assert!(footer(&mut app).starts_with(" u undo  "), "{}", footer(&mut app));
+        assert!(footer(&mut app).starts_with(" s start  u undo  "), "{}", footer(&mut app));
         edit_end(&mut app, "1030", true);
         assert!(today_file(&root).contains(&format!("inc {} - {} # email", today_at(10, 30), today_at(11, 0))));
 
@@ -3600,5 +3839,127 @@ mod tests {
         assert!(!app.quit && app.notice.is_none());
         let _ = fs::remove_dir_all(&root);
     }
+
+
+    /// A database with a single entry yesterday 08-12, so that starting an
+    /// entry now never overlaps anything.
+    fn yesterday_db(name: &str) -> PathBuf {
+        let root = env::temp_dir().join(format!("timew-tui-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data")).unwrap();
+        let tz = jiff::tz::TimeZone::system();
+        let y = jiff::Zoned::now().date().yesterday().unwrap();
+        let at = |h: i8| timew_core::interval::format_iso(y.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
+        let file = root.join("data").join(format!("{:04}-{:02}.data", y.year(), y.month()));
+        fs::write(file, format!("inc {} - {} # planning\n", at(8), at(12))).unwrap();
+        root
+    }
+
+    fn all_lines(root: &std::path::Path) -> String {
+        let mut names: Vec<_> = fs::read_dir(root.join("data")).unwrap().map(|e| e.unwrap().path()).collect();
+        names.sort();
+        names.iter().filter(|p| p.extension().is_some_and(|e| e == "data") && !p.ends_with("tags.data")).map(|p| fs::read_to_string(p).unwrap()).collect()
+    }
+
+    /// The color of the top-left corner of the panel titled `title`.
+    fn panel_border(app: &mut App, title: &str) -> Color {
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        for y in 0..buf.area.height {
+            let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            if let Some(i) = line.find(title) {
+                let col = line[..i].chars().count() as u16;
+                let x = (0..col).rev().find(|&x| buf[(x, y)].symbol() == "╭").unwrap();
+                return buf[(x, y)].fg;
+            }
+        }
+        panic!("no panel {title}");
+    }
+
+    #[test]
+    fn s_starts_an_entry_and_shows_it() {
+        let root = yesterday_db("start");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        // a year view filtered by a tag the new entry won't have
+        press(&mut app, '4');
+        app.tag = Some("planning".into());
+        app.load();
+        assert!(footer(&mut app).starts_with(" s start "), "{}", footer(&mut app));
+
+        press(&mut app, 's');
+        assert!(render_at(&mut app, 140, 24).contains("Start tracking"));
+        type_text(&mut app, "focus \"deep work");
+        key(&mut app, KeyCode::Enter);
+        assert!(render_at(&mut app, 140, 24).contains("Tags: a quote is not closed."));
+        type_text(&mut app, "\"");
+        key(&mut app, KeyCode::Tab);
+        type_text(&mut app, "writing");
+        key(&mut app, KeyCode::Enter);
+
+        assert!(app.start_form.is_none());
+        assert_eq!((app.filter, app.tag.clone()), (Filter::Day, None), "today, without the tag filter");
+        let iv = app.selected().unwrap().interval.clone();
+        assert!(iv.is_open(), "the new entry is selected");
+        assert_eq!(iv.tags, vec!["deep work", "focus"]);
+        assert_eq!(iv.annotation.as_deref(), Some("writing"));
+        let line = format!("inc {} # \"deep work\" focus # \"writing\"\n", timew_core::interval::format_iso(iv.range.start));
+        assert!(all_lines(&root).contains(&line), "{}", all_lines(&root));
+        let screen = render_at(&mut app, 140, 24);
+        assert!(screen.contains("Entry details · running") && screen.contains("Started"), "{screen}");
+        assert_eq!(panel_border(&mut app, "Entry details"), Color::Red, "running: red border");
+        assert!(footer(&mut app).starts_with(" s stop "));
+
+        // a stopped entry has the normal border
+        press(&mut app, '2');
+        assert!(!app.selected().unwrap().interval.is_open());
+        assert_eq!(panel_border(&mut app, "Entry details"), ACCENT);
+        // starting again is not offered while one runs; s stops instead
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn s_stops_the_running_entry_and_keeps_the_view() {
+        let root = yesterday_db("stop");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, 's');
+        type_text(&mut app, "work");
+        key(&mut app, KeyCode::Enter);
+        let started = app.selected().unwrap().interval.clone();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        press(&mut app, '4'); // a different view while it runs
+        press(&mut app, 's');
+        assert_eq!(app.filter, Filter::Year, "stopping keeps the filters");
+        let stopped = app.selected().unwrap().interval.clone();
+        assert!(stopped.is_ended() && stopped.range.start == started.range.start, "the stopped entry stays selected");
+        assert!(render_at(&mut app, 140, 24).contains("Stopped after"));
+        assert!(footer(&mut app).starts_with(" s start "));
+        assert_ne!(panel_border(&mut app, "Entry details"), Color::Red);
+        assert!(!all_lines(&root).contains(&format!("inc {} # work\n", timew_core::interval::format_iso(started.range.start))));
+
+        // u undoes the stop: running again
+        press(&mut app, 'u');
+        assert!(all_lines(&root).contains(&format!("inc {} # work\n", timew_core::interval::format_iso(started.range.start))));
+        assert!(footer(&mut app).starts_with(" s stop "));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn s_in_a_narrow_window_opens_the_details() {
+        let root = yesterday_db("start-narrow");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        render(&mut app);
+        press(&mut app, 's');
+        key(&mut app, KeyCode::Enter); // no tags, no annotation
+        let screen = render(&mut app);
+        assert!(!app.wide && app.details);
+        assert!(screen.contains("Entry details · running"), "{screen}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
 
 }

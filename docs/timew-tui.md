@@ -2,8 +2,8 @@
 
 A terminal UI for browsing a Timewarrior database. It shows the same rows
 as `timew summary`, with filters you can switch with single keys or the
-mouse, and lets you change an entry's start, end, tags and annotation
-(`e`). Nothing else is ever changed.
+mouse. It can start and stop tracking (`s`) and change an entry's start,
+end, tags and annotation (`e`); nothing else is ever changed.
 
 ```sh
 cargo build --release -p timew-tui
@@ -82,6 +82,27 @@ The table is as wide as its columns need (mostly the longest tag), and at
 least as wide as its title. So the switching point can move slightly between
 filters. The layout is chosen again on every redraw, so resizing the
 terminal switches immediately.
+
+### Starting and stopping
+
+`s` does what fits: **start** a new entry when nothing is running, **stop**
+the running one otherwise. The help line shows `s start` or `s stop`.
+
+- **Start:** a dialog asks for the **tags** (separated by spaces,
+  `"in quotes"` with spaces) and an **annotation** (any text); both may be
+  empty. `Tab`/`↑↓` switch between them, `Enter` starts the entry now,
+  `Esc` cancels. Afterwards the view switches to **today** (a tag filter
+  the new entry doesn't match is dropped), the new entry is selected and its
+  details are open (in a narrow window, the panel below the table).
+- **Stop:** the running entry ends now. The view and the filters stay as
+  they are, and the stopped entry stays selected. As with `timew-cli stop`,
+  configured exclusions inside it (lunch, nights) are cut out.
+- While an entry runs, its **details panel has a red border** whenever it
+  is the selected one (titled "Entry details · running"), and its times
+  count up every second.
+- `u` undoes a start or a stop like an edit.
+- Starting refuses if the new entry would overlap a later one; stopping
+  refuses if the running entry starts in the future.
 
 ### Editing an entry
 
@@ -211,8 +232,9 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `PgUp` `PgDn` / `Space` | Move a page |
 | `Home` `End` / `g` `G` | First or last row |
 | `Enter` | Open or close the details (narrow layout) |
+| `s` | **Start** a new entry (asks for tags and annotation), or **stop** the running one |
 | `e` | **Edit** the start, end, tags and annotation of the selected entry |
-| `u` | **Undo** the last saved edit (only shown while there is one) |
+| `u` | **Undo** the last saved edit, start or stop (only shown while there is one) |
 | `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
 | `1` / `d` | Today |
 | `2` / `y` | Yesterday |
@@ -252,6 +274,7 @@ legend (`?`) works the same way.
 | **Year list** (Shift+4) | The current year and the four before it, newest first · `↑↓`/`jk` and `g`/`G` move · `Enter`/`Space` select · `⌫` **current year** (same as `4`) · `Esc`/`q` close |
 | **Tag list** (`t`) | "All tags" plus every tag in the database with its entry count · `↑↓`/`jk`, `PgUp`/`PgDn` and `g`/`G` move · `Enter`/`Space` select · `⌫` **remove the tag filter** · `Esc`/`q`/`t` close |
 | **Date range** (`c`) | Type into **From**/**To** · `Tab`/`↑↓` or a click switches fields · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` apply · `Esc` cancel |
+| **Start dialog** (`s`) | Type the tags and the annotation · `Tab`/`↑↓` switch fields · `←→`, `Home`/`End` move the cursor · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` start · `Esc` cancel |
 | **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous (start date, start time, end date, end time, tags, annotation) · in dates and times typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`); in the tags and the annotation it inserts · `←→`, `Home`/`End` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
 
 Each list opens on the current choice: the month or year being shown, or the
