@@ -1,17 +1,18 @@
 # timew-rs
 
 A Rust implementation of [Timewarrior](https://timewarrior.net/) that uses
-the same database format, plus **timew-tui**, a read-only terminal UI for
-browsing that data.
+the same database format, plus **timew-tui**, a terminal UI for browsing
+that data and correcting start and end times.
 
 > **Status:** `timew-rs` implements all of Timewarrior's commands: tracking
 > (`start`, `stop`, `track`, `continue`, …), editing (`modify`, `move`,
 > `tag`, `join`, `split`, `undo`, …), the reports (`summary`, `day`,
 > `week`, `month`, `gaps`, …), extensions and configuration. It passes
-> Timewarrior's own test suite. `timew-tui` only reads.
+> Timewarrior's own test suite. `timew-tui` browses the data and can edit
+> the start and end of an entry.
 
 ```
- timew-tui   ./examples/pm-2025  (read-only)
+ timew-tui   ./examples/pm-2025
 ╭───────╮ ╭─────────────╮ ╭─────────────╮ ╭────────╮ ╭─────────╮   ╭───────╮
 │ 1 Day │ │ 2 Yesterday │ │ 3 2025-03 ▾ │ │ 4 Year │ │ 5 Range │   │ 6 Tag │
 ╰───────╯ ╰─────────────╯ ╰─────────────╯ ╰────────╯ ╰─────────╯   ╰───────╯
@@ -147,6 +148,9 @@ A separate program for browsing the summary interactively:
 - **Filters:** quick buttons for day, yesterday, month and year, plus lists
   to pick a month (Shift+3) or one of the last 5 years (Shift+4), a form for
   your own date range (`5`), and a tag list (`6`).
+- **Editing:** `e` edits the start and end date and time of the selected
+  entry in the details panel. Overlaps are refused, or adjusted with
+  Shift+Enter (or Alt+Enter), and `timew-rs undo` reverts a change.
 
 Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/timew-tui.md).
 

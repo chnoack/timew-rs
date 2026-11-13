@@ -97,7 +97,7 @@ Entries are sorted by tag:
   `Note: 'tag' is a new tag.`
 - If the file is missing or can't be parsed, `timew-rs` rebuilds it from
   the intervals (and says so: `Tags database does not exist. Recreating
-  from interval data...`). `timew-tui` reads it but never writes it.
+  from interval data...`). `timew-tui` only writes it when it saves an edit.
 - `timew-rs get dom.tags…` reads the tags from this file. `timew-rs tags`,
   `dom.tracked.tags…` and the TUI's tag list collect the tags from the
   intervals themselves.

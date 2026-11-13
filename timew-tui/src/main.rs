@@ -1,10 +1,11 @@
-//! `timew-tui`: a read-only terminal UI for a Timewarrior database.
+//! `timew-tui`: a terminal UI for a Timewarrior database.
 //!
-//! Phase 1 scope:
 //!   - open the database from `$TIMEWARRIORDB`, else the standard location
 //!   - show a scrollable summary (same rows as `timew summary`)
-//!   - quick filters: Day, Yesterday, Month (default), Year
-//!   - strictly read-only: nothing is ever written to the database
+//!   - quick filters: Day, Yesterday, Month (default), Year, a date range, a tag
+//!   - edit the start and end of an entry (`e`); everything else is read-only.
+//!     Edits go through the `timew-rs` library, so overlaps are refused and
+//!     `timew-rs undo` reverts them.
 
 use std::env;
 use std::io;
@@ -12,7 +13,8 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEvent, MouseEventKind,
+    KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
@@ -26,7 +28,9 @@ use ratatui::{DefaultTerminal, Frame};
 
 use timew_rs::commands::summary::{self, Summary};
 use timew_rs::database::{Database, Tracked};
-use timew_rs::datetime::{expand_range_hint, parse_datetime};
+use timew_rs::datetime::{expand_range_hint, make_local, parse_datetime};
+use timew_rs::interval::Interval;
+use timew_rs::paths::Paths;
 use timew_rs::range::Range;
 
 // ---------------------------------------------------------------------------
@@ -129,6 +133,128 @@ impl RangeInput {
     }
 }
 
+/// State of the edit form (`e`), shown in the details panel: the start
+/// and end of the selected entry as date and time fields.
+#[derive(Debug, Clone)]
+struct EditForm {
+    /// The entry as it is stored.
+    original: Interval,
+    id: u32,
+    /// Start date, start time, end date, end time.
+    fields: [String; 4],
+    /// The fields as first shown; unchanged ones keep their exact time
+    /// (including seconds).
+    initial: [String; 4],
+    /// Index into `fields` of the field being typed in.
+    field: usize,
+    /// Cursor position (in characters) in that field.
+    cursor: usize,
+    error: Option<String>,
+}
+
+/// Screen widths of the fields: a leading space, the text, room for the cursor.
+const EDIT_FIELD_WIDTHS: [u16; 4] = [12, 10, 12, 10];
+
+fn is_separator(c: char) -> bool {
+    c == '-' || c == ':'
+}
+
+impl EditForm {
+    fn new(t: &Tracked) -> Self {
+        let iv = &t.interval;
+        let date = |e: i64| local_date(e);
+        let time = |e: i64| jiff::Timestamp::from_second(e).unwrap().to_zoned(jiff::tz::TimeZone::system()).strftime("%H:%M").to_string();
+        let fields = [
+            date(iv.range.start),
+            time(iv.range.start),
+            if iv.is_open() { String::new() } else { date(iv.range.end) },
+            if iv.is_open() { String::new() } else { time(iv.range.end) },
+        ];
+        EditForm { original: iv.clone(), id: t.id, initial: fields.clone(), fields, field: 0, cursor: 0, error: None }
+    }
+
+    fn len(&self) -> usize {
+        self.fields[self.field].chars().count()
+    }
+
+    /// Go to field `i`, with the cursor at its start (or end).
+    fn focus(&mut self, i: usize, at_end: bool) {
+        self.field = i % 4;
+        self.cursor = if at_end { self.len() } else { 0 };
+    }
+
+    /// Type `c` at the cursor. Over existing text it replaces the character
+    /// under the cursor, stepping over the `-`/`:` separators, so a date or
+    /// time can be retyped digit by digit; at the end it appends.
+    fn type_char(&mut self, c: char) {
+        let max = EDIT_FIELD_WIDTHS[self.field] as usize - 2;
+        let mut chars: Vec<char> = self.fields[self.field].chars().collect();
+        if !is_separator(c) && chars.get(self.cursor).copied().is_some_and(is_separator) {
+            self.cursor += 1;
+        }
+        if self.cursor < chars.len() {
+            chars[self.cursor] = c;
+        } else if chars.len() < max {
+            chars.push(c);
+        } else {
+            return;
+        }
+        self.cursor += 1;
+        if chars.get(self.cursor).copied().is_some_and(is_separator) && !is_separator(c) {
+            self.cursor += 1;
+        }
+        self.fields[self.field] = chars.into_iter().collect();
+        self.error = None;
+    }
+
+    fn remove(&mut self, at: usize) {
+        let mut chars: Vec<char> = self.fields[self.field].chars().collect();
+        if at < chars.len() {
+            chars.remove(at);
+            self.fields[self.field] = chars.into_iter().collect();
+        }
+        self.error = None;
+    }
+
+    /// The entry with the start and end from the fields.
+    fn edited(&self) -> Result<Interval, String> {
+        let f: Vec<&str> = self.fields.iter().map(|s| s.trim()).collect();
+        let unchanged = |a: usize, b: usize| f[a] == self.initial[a].trim() && f[b] == self.initial[b].trim();
+        let mut edited = self.original.clone();
+        if !unchanged(0, 1) {
+            edited.range.start = parse_date_time(f[0], f[1], "Start")?;
+        }
+        if f[2].is_empty() && f[3].is_empty() {
+            if !self.original.is_open() {
+                return Err("Enter the end date and time.".into());
+            }
+            edited.range.end = 0;
+        } else if !unchanged(2, 3) {
+            // an empty end date means the day the entry starts
+            let date = if f[2].is_empty() { f[0] } else { f[2] };
+            edited.range.end = parse_date_time(date, f[3], "End")?;
+        }
+        if edited.range.is_ended() && edited.range.end <= edited.range.start {
+            return Err("The end must be after the start.".into());
+        }
+        Ok(edited)
+    }
+}
+
+/// `YYYY-MM-DD` and `HH:MM[:SS]` (local time) as an instant.
+fn parse_date_time(date: &str, time: &str, what: &str) -> Result<i64, String> {
+    let d = jiff::civil::Date::strptime("%Y-%m-%d", date).map_err(|_| format!("{what} date: use YYYY-MM-DD."))?;
+    let parts: Vec<&str> = time.split(':').collect();
+    let num = |s: &str, max: i64| s.parse::<i64>().ok().filter(|v| (0..=max).contains(v) && !s.is_empty() && s.len() <= 2);
+    let bad = || format!("{what} time: use HH:MM.");
+    let (h, m, sec) = match parts.as_slice() {
+        [h, m] => (num(h, 23).ok_or_else(bad)?, num(m, 59).ok_or_else(bad)?, 0),
+        [h, m, sec] => (num(h, 23).ok_or_else(bad)?, num(m, 59).ok_or_else(bad)?, num(sec, 59).ok_or_else(bad)?),
+        _ => return Err(bad()),
+    };
+    Ok(make_local(d.year() as i64, d.month() as i64, d.day() as i64, h, m, sec))
+}
+
 /// Accept `YYYY-MM-DD`, `YYYY-MM-DD HH:MM[:SS]` and `YYYY-MM-DDTHH:MM[:SS]`
 /// and normalize to the `YYYY-MM-DD[THH:MM:SS]` form `parse_datetime` takes.
 fn normalize_datetime(input: &str) -> String {
@@ -218,6 +344,14 @@ enum Button {
 
 struct App {
     db_root: PathBuf,
+    /// Where `timewarrior.cfg` is (read when saving an edit).
+    config_dir: PathBuf,
+    /// Open edit form (`e`) for the selected entry.
+    edit: Option<EditForm>,
+    /// Screen areas of the edit form's fields from the last draw.
+    edit_fields: [Rect; 4],
+    /// A message for the status line, cleared by the next key.
+    notice: Option<String>,
     filter: Filter,
     range: Range,
     /// The range used by `Filter::Custom`, and the text it was entered as.
@@ -275,8 +409,17 @@ struct App {
 
 impl App {
     fn new(db_root: PathBuf) -> Self {
+        let config_dir = if env::var_os("TIMEWARRIORDB").is_some_and(|v| !v.is_empty()) {
+            db_root.clone()
+        } else {
+            Paths::from_env().config_dir
+        };
         let mut app = App {
             db_root,
+            config_dir,
+            edit: None,
+            edit_fields: [Rect::default(); 4],
+            notice: None,
             filter: Filter::Month,
             range: Range::empty(),
             custom_range: Range::empty(),
@@ -357,6 +500,16 @@ impl App {
         }
     }
 
+    /// Keys go to the summary table: no form, list or legend is open.
+    fn table_has_focus(&self) -> bool {
+        self.edit.is_none()
+            && self.legend.is_none()
+            && self.picker.is_none()
+            && self.month_picker.is_none()
+            && self.year_picker.is_none()
+            && self.range_input.is_none()
+    }
+
     /// The interval behind the currently selected summary row.
     fn selected(&self) -> Option<&Tracked> {
         let row = self.summary.rows.get(self.table.selected()?)?;
@@ -373,6 +526,83 @@ impl App {
                 self.details = !self.details && self.selected().is_some();
             }
         }
+    }
+
+    /// Edit the start and end of the selected entry in the details panel.
+    fn open_edit(&mut self) {
+        let Some(t) = self.selected() else { return };
+        self.edit = Some(EditForm::new(t));
+        if !self.wide {
+            self.chart = false;
+            self.details = true;
+        }
+    }
+
+    fn on_edit_key(&mut self, key: KeyEvent) {
+        let Some(form) = &mut self.edit else { return };
+        match key.code {
+            KeyCode::Esc => self.edit = None,
+            KeyCode::Tab | KeyCode::Down => form.focus(form.field + 1, false),
+            KeyCode::BackTab | KeyCode::Up => form.focus(form.field + 3, false),
+            // the cursor moves into the neighboring field at either end
+            KeyCode::Left if form.cursor == 0 => form.focus(form.field + 3, true),
+            KeyCode::Left => form.cursor -= 1,
+            KeyCode::Right if form.cursor >= form.len() => form.focus(form.field + 1, false),
+            KeyCode::Right => form.cursor += 1,
+            KeyCode::Home => form.cursor = 0,
+            KeyCode::End => form.cursor = form.len(),
+            KeyCode::Backspace if form.cursor > 0 => {
+                form.cursor -= 1;
+                form.remove(form.cursor);
+            }
+            KeyCode::Delete => form.remove(form.cursor),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                form.fields[form.field].clear();
+                form.cursor = 0;
+            }
+            KeyCode::Char(c) => form.type_char(c),
+            // Shift+Enter (where the terminal reports it) or Alt+Enter: save and
+            // adjust overlapping entries, like `timew modify … :adjust`
+            KeyCode::Enter if key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => self.save_edit(true),
+            KeyCode::Enter => self.save_edit(false),
+            _ => {}
+        }
+    }
+
+    fn save_edit(&mut self, adjust: bool) {
+        let Some(form) = &mut self.edit else { return };
+        let edited = match form.edited() {
+            Ok(e) => e,
+            Err(e) => return form.error = Some(e),
+        };
+        let mut paths = Paths::from_env();
+        paths.db_dir = self.db_root.clone();
+        paths.config_dir = self.config_dir.clone();
+        let adjusted = match timew_rs::modify_interval(&paths, &form.original, &edited, adjust) {
+            Ok(n) => n,
+            Err(e) if e.starts_with("You cannot overlap") => {
+                return form.error = Some("Overlaps another entry. Shift+Enter adjusts it.".into());
+            }
+            Err(e) => return form.error = Some(e),
+        };
+        let changed = form.original != edited;
+        self.edit = None;
+        self.load();
+        // keep the edited entry selected, if it is still shown
+        let row = self.summary.rows.iter().position(|r| self.tracked[r.source].interval == edited);
+        if let Some(i) = row {
+            self.table.select(Some(i));
+        }
+        let others = match adjusted {
+            0 => String::new(),
+            1 => " 1 overlapping entry adjusted.".into(),
+            n => format!(" {n} overlapping entries adjusted."),
+        };
+        self.notice = Some(match (changed, row) {
+            (false, _) => "No changes.".into(),
+            (true, Some(_)) => format!("Saved.{others} 'timew-rs undo' reverts it."),
+            (true, None) => format!("Saved; the entry is now outside the shown period.{others}"),
+        });
     }
 
     fn open_range_input(&mut self) {
@@ -569,6 +799,10 @@ impl App {
             self.quit = true;
             return;
         }
+        self.notice = None;
+        if self.edit.is_some() {
+            return self.on_edit_key(key);
+        }
         if self.legend.is_some() {
             return self.on_legend_key(key);
         }
@@ -591,6 +825,7 @@ impl App {
             // the wide layout always shows the chart; b toggles it in the narrow one
             KeyCode::Char('b') if !self.wide => self.chart = !self.chart,
             KeyCode::Enter | KeyCode::Char('i') => self.toggle_details(),
+            KeyCode::Char('e') => self.open_edit(),
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
@@ -642,6 +877,15 @@ impl App {
 
     fn on_mouse(&mut self, mouse: MouseEvent) {
         let pos = Position::new(mouse.column, mouse.row);
+        if let Some(form) = &mut self.edit {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind
+                && let Some(i) = self.edit_fields.iter().position(|r| r.contains(pos))
+            {
+                form.field = i;
+                form.cursor = (pos.x.saturating_sub(self.edit_fields[i].x + 1) as usize).min(form.len());
+            }
+            return;
+        }
         if self.legend.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollDown => self.legend_scroll(3),
@@ -769,6 +1013,8 @@ impl App {
 // ---------------------------------------------------------------------------
 
 const ACCENT: Color = Color::Cyan;
+/// Border of the view that has the keyboard focus.
+const FOCUS: Color = Color::Yellow;
 /// Wk/Date/Day colors, alternating from one ISO week to the next.
 const WEEK_COLORS: [Color; 2] = [Color::Cyan, Color::Magenta];
 /// Colors for the tags in the chart, assigned in alphabetical tag order.
@@ -853,13 +1099,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
         if chart.height >= 3 + PAD.top + PAD.bottom {
             draw_chart(frame, chart, app);
         }
-    } else if !app.wide && app.chart && has_selection {
+    } else if !app.wide && app.chart && app.edit.is_none() && has_selection {
         // narrow: the chart below the table
         let h = chart_height(&tag_totals(app));
         let [table, chart] = Layout::vertical([Constraint::Min(5), Constraint::Length(h)]).areas(body);
         draw_summary(frame, table, app);
         draw_chart(frame, chart, app);
-    } else if !app.wide && app.details && has_selection {
+    } else if !app.wide && (app.details || app.edit.is_some()) && has_selection {
         // narrow: details below the table, only after Enter
         let [table, details] = Layout::vertical([Constraint::Min(5), Constraint::Length(DETAILS_HEIGHT)]).areas(body);
         draw_summary(frame, table, app);
@@ -1211,7 +1457,10 @@ fn table_width(summary: &Summary) -> u16 {
     (cols + HEADERS.len() - 1 + 2) as u16 + PAD.left + PAD.right
 }
 
-fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_details(frame: &mut Frame, area: Rect, app: &mut App) {
+    if app.edit.is_some() {
+        return draw_edit(frame, area, app);
+    }
     let Some(t) = app.selected() else { return };
     let iv = &t.interval;
     let now = jiff::Timestamp::now().as_second();
@@ -1273,6 +1522,62 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+/// The details panel as a form for the start and end of the entry.
+fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(form) = &app.edit else { return };
+    let iv = &form.original;
+    let label = |s: &'static str| Span::styled(format!("{s:<11}"), Style::new().fg(ACCENT).bold());
+    let field = |i: usize| {
+        let style = if form.field == i { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
+        Span::styled(format!(" {:<w$}", form.fields[i], w = EDIT_FIELD_WIDTHS[i] as usize - 1), style)
+    };
+    let tags = if iv.tags.is_empty() { "(none)".to_string() } else { iv.tags.join(", ") };
+    let now = jiff::Timestamp::now().as_second();
+    let duration = match form.edited() {
+        Ok(e) => Span::styled(format_hm(e.range.total(now)), Style::new().fg(Color::Yellow).bold()),
+        Err(_) => Span::styled("–", Style::new().dim()),
+    };
+    let last = match &form.error {
+        Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
+        None if iv.is_open() => Line::styled("YYYY-MM-DD  HH:MM · empty end: still tracking", Style::new().dim()),
+        None => Line::styled("YYYY-MM-DD  HH:MM", Style::new().dim()),
+    };
+    let lines = vec![
+        Line::from(vec![label("ID"), Span::raw(format!("@{}", form.id))]),
+        Line::from(vec![label("Tags"), Span::raw(tags)]),
+        Line::from(vec![
+            label("Annotation"),
+            match &iv.annotation {
+                Some(a) if !a.is_empty() => Span::raw(a.clone()),
+                _ => Span::styled("(none)", Style::new().dim()),
+            },
+        ]),
+        Line::raw(""),
+        Line::from(vec![label("Start"), field(0), Span::raw(" "), field(1)]),
+        Line::from(vec![label("End"), field(2), Span::raw(" "), field(3)]),
+        Line::from(vec![label("Duration"), duration]),
+        Line::raw(""),
+        last,
+    ];
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(FOCUS))
+        .title(" Edit entry ")
+        .title_bottom(Line::from(" Enter save · ⇧Enter adjust · Esc cancel ").right_aligned().dim())
+        .padding(PAD);
+    let inner = block.inner(area);
+    let x = inner.x + 11;
+    let rect = |dx: u16, dy: u16, i: usize| Rect::new(x + dx, inner.y + dy, EDIT_FIELD_WIDTHS[i], 1).intersection(inner);
+    app.edit_fields = [rect(0, 4, 0), rect(EDIT_FIELD_WIDTHS[0] + 1, 4, 1), rect(0, 5, 2), rect(EDIT_FIELD_WIDTHS[2] + 1, 5, 3)];
+    let active = app.edit_fields[form.field];
+    let cursor = Position::new((active.x + 1 + form.cursor as u16).min(active.right().saturating_sub(1)), active.y);
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+    if active.width > 0 && active.height > 0 {
+        frame.set_cursor_position(cursor);
+    }
+}
+
 /// "2026-11-12 Thu 08:00" in local time.
 fn local_datetime(epoch: i64) -> String {
     let z = jiff::Timestamp::from_second(epoch).unwrap().to_zoned(jiff::tz::TimeZone::system());
@@ -1284,7 +1589,6 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" timew-tui ", Style::new().fg(Color::Black).bg(ACCENT).bold()),
         Span::raw("  "),
         Span::styled(app.db_root.display().to_string(), Style::new().dim()),
-        Span::styled("  (read-only)", Style::new().dim().italic()),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -1438,7 +1742,9 @@ fn summary_title(app: &App) -> Line<'static> {
 
 fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
     let title = summary_title(app);
-    let block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).padding(PAD);
+    // the view with the focus has a yellow border (like the edit form)
+    let border = if app.table_has_focus() { Style::new().fg(FOCUS) } else { Style::new() };
+    let block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(border).title(title).padding(PAD);
 
     if let Some(err) = &app.error {
         let p = Paragraph::new(format!("Error reading database:\n{err}")).fg(Color::Red).block(block);
@@ -1512,6 +1818,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let intervals = app.summary.rows.len();
     let total = app.summary.grand_total;
     let avg = if days > 0 { format!("{} h", decimal_hours(total / days as i64)) } else { "-".into() };
+    if let Some(notice) = &app.notice {
+        frame.render_widget(Paragraph::new(Line::styled(format!(" {notice}"), Style::new().fg(Color::Green).bold())), area);
+        return;
+    }
     let pos = match app.table.selected() {
         Some(i) if intervals > 0 => format!("row {}/{}", i + 1, intervals),
         _ => String::new(),
@@ -1542,6 +1852,7 @@ fn draw_help(frame: &mut Frame, area: Rect, wide: bool) {
     if !wide {
         items.extend([("b", "chart"), ("Enter", "details")]);
     }
+    items.push(("e", "edit"));
     items.extend([("PgUp/Dn", "page"), ("r", "reload")]);
 
     // Keep "q quit" at the end. If not everything fits, put "? help" (the
@@ -1597,6 +1908,15 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("Enter  i", "details (narrow window)"),
         k("b", "hours-per-tag chart (narrow window)"),
         k("Esc", "close the chart / details (narrow window)"),
+        h("Editing"),
+        k("e", "edit start and end of the selected entry"),
+        k("Tab ↑ ↓", "next / previous field"),
+        k("0-9", "overwrite at the cursor (skips - and :)"),
+        k("← → Home End", "move the cursor"),
+        k("⌫ Del  Ctrl+U", "delete / clear the field"),
+        k("Enter", "save (overlaps are refused)"),
+        k("⇧Enter  Alt+Enter", "save, adjusting overlapping entries"),
+        k("Esc", "cancel"),
         h("In lists and the date form"),
         k("↑ ↓  j k", "move"),
         k("← →", "change the year (month list)"),
@@ -1716,7 +2036,13 @@ fn main() -> std::process::ExitCode {
     let app = App::new(db_root);
     let mut terminal = ratatui::init();
     let _ = execute!(io::stdout(), EnableMouseCapture);
+    // lets terminals that support it report Shift+Enter (kitty keyboard protocol)
+    let enhanced = ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+        && execute!(io::stdout(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)).is_ok();
     let result = run(&mut terminal, app);
+    if enhanced {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(io::stdout(), DisableMouseCapture);
     ratatui::restore();
 
@@ -2585,4 +2911,202 @@ mod tests {
         assert!(render(&mut app).contains("No data found in the range"));
         let _ = fs::remove_dir_all(&root);
     }
+
+    fn ctrl_u(app: &mut App) {
+        app.on_key(KeyEvent {
+            code: KeyCode::Char('u'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+    }
+
+    /// Today's datafile of a sample database.
+    fn today_file(root: &std::path::Path) -> String {
+        let today = jiff::Zoned::now().date();
+        fs::read_to_string(root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month()))).unwrap()
+    }
+
+    fn today_at(h: i8, m: i8) -> String {
+        let tz = jiff::tz::TimeZone::system();
+        let ts = jiff::Zoned::now().date().at(h, m, 0, 0).to_zoned(tz).unwrap().timestamp();
+        timew_rs::interval::format_iso(ts.as_second())
+    }
+
+    #[test]
+    fn edit_changes_start_and_end() {
+        let root = sample_db("edit-save");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        render_at(&mut app, 140, 24);
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["meetings".to_string()]);
+
+        press(&mut app, 'e');
+        let screen = render_at(&mut app, 140, 24);
+        println!("{screen}");
+        assert!(screen.contains("Edit entry") && !screen.contains("Entry details"));
+        let today = local_date(jiff::Timestamp::now().as_second());
+        assert!(screen.lines().any(|l| l.contains("Start ") && l.contains(&today) && l.contains("08:00")));
+        assert!(screen.lines().any(|l| l.contains("End ") && l.contains(&today) && l.contains("10:00")));
+
+        // start 07:30, end 09:45: typing overwrites the digits
+        key(&mut app, KeyCode::Tab);
+        type_text(&mut app, "0730");
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Tab);
+        type_text(&mut app, "0945");
+        assert_eq!(app.edit.as_ref().unwrap().fields[1], "07:30");
+        assert_eq!(app.edit.as_ref().unwrap().fields[3], "09:45");
+        assert!(render_at(&mut app, 140, 24).contains("2:15"), "duration preview");
+        key(&mut app, KeyCode::Enter);
+
+        let screen = render_at(&mut app, 140, 24);
+        assert!(app.edit.is_none());
+        assert!(screen.contains("Saved."), "{screen}");
+        let iv = &app.selected().unwrap().interval;
+        assert_eq!(iv.tags, vec!["meetings".to_string()], "the edited entry stays selected");
+        let data = today_file(&root);
+        assert!(data.contains(&format!("inc {} - {} # meetings", today_at(7, 30), today_at(9, 45))), "{data}");
+        let undo = fs::read_to_string(root.join("data/undo.data")).unwrap();
+        assert!(undo.starts_with("txn:\n  type: interval\n"), "{undo}");
+        // the notice goes away with the next key
+        press(&mut app, 'j');
+        assert!(!render_at(&mut app, 140, 24).contains("Saved."));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_refuses_overlaps_and_bad_input() {
+        let root = sample_db("edit-refuse");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        render(&mut app);
+        let before = today_file(&root);
+
+        // narrow window: the form opens below the table
+        press(&mut app, 'e');
+        let screen = render(&mut app);
+        assert!(!app.wide && screen.contains("Edit entry"));
+        let header = screen.lines().find(|l| l.contains("Summary · Day")).unwrap();
+        assert!(!header.contains("Edit entry"));
+
+        key(&mut app, KeyCode::Up); // end time
+        ctrl_u(&mut app);
+        type_text(&mut app, "25:00");
+        key(&mut app, KeyCode::Enter);
+        assert!(render(&mut app).contains("End time: use HH:MM."));
+
+        ctrl_u(&mut app);
+        type_text(&mut app, "10:30"); // runs into the email entry at 10:00
+        key(&mut app, KeyCode::Enter);
+        let screen = render(&mut app);
+        assert!(screen.contains("Overlaps another entry. Shift+Enter adjusts it."), "{screen}");
+        assert!(app.edit.is_some(), "the form stays open");
+
+        ctrl_u(&mut app);
+        type_text(&mut app, "07:00"); // before the start
+        key(&mut app, KeyCode::Enter);
+        assert!(render(&mut app).contains("The end must be after the start."));
+
+        key(&mut app, KeyCode::Esc);
+        assert!(app.edit.is_none() && !app.quit);
+        assert_eq!(today_file(&root), before, "nothing was written");
+        assert!(!root.join("data/undo.data").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn edit_fields_overwrite_and_move_the_cursor() {
+        let root = sample_db("edit-cursor");
+        let mut app = App::new(root.clone());
+        press(&mut app, '1');
+        render_at(&mut app, 140, 24);
+        press(&mut app, 'e');
+        // the date field: retype it digit by digit
+        type_text(&mut app, "20251231");
+        let form = app.edit.as_ref().unwrap();
+        assert_eq!((form.fields[0].as_str(), form.field, form.cursor), ("2025-12-31", 0, 10));
+        // → at the end goes to the time field, ← at its start back again
+        key(&mut app, KeyCode::Right);
+        assert_eq!((app.edit.as_ref().unwrap().field, app.edit.as_ref().unwrap().cursor), (1, 0));
+        key(&mut app, KeyCode::Left);
+        assert_eq!((app.edit.as_ref().unwrap().field, app.edit.as_ref().unwrap().cursor), (0, 10));
+        // backspace deletes before the cursor, typing then appends
+        key(&mut app, KeyCode::Backspace);
+        key(&mut app, KeyCode::Backspace);
+        type_text(&mut app, "30");
+        assert_eq!(app.edit.as_ref().unwrap().fields[0], "2025-12-30");
+        key(&mut app, KeyCode::Home);
+        key(&mut app, KeyCode::Delete);
+        assert_eq!(app.edit.as_ref().unwrap().fields[0], "025-12-30");
+        // the terminal cursor follows
+        key(&mut app, KeyCode::End);
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let field = app.edit_fields[0];
+        assert_eq!(terminal.get_cursor_position().unwrap(), Position::new(field.x + 1 + 9, field.y));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    fn key_with(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+        app.on_key(KeyEvent { code, modifiers, kind: KeyEventKind::Press, state: KeyEventState::NONE });
+    }
+
+    #[test]
+    fn shift_enter_adjusts_overlapping_entries() {
+        for (name, modifier) in [("shift", KeyModifiers::SHIFT), ("alt", KeyModifiers::ALT)] {
+            let root = sample_db(&format!("edit-adjust-{name}"));
+            let mut app = App::new(root.clone());
+            app.config_dir = root.clone();
+            press(&mut app, '1');
+            render_at(&mut app, 140, 24);
+            // meetings 08-10 now ends 10:30, into email 10-11
+            press(&mut app, 'e');
+            key(&mut app, KeyCode::Up);
+            type_text(&mut app, "1030");
+            key(&mut app, KeyCode::Enter);
+            assert!(app.edit.as_ref().unwrap().error.is_some(), "plain Enter refuses the overlap");
+            key_with(&mut app, KeyCode::Enter, modifier);
+            assert!(app.edit.is_none());
+            let screen = render_at(&mut app, 140, 24);
+            assert!(screen.contains("Saved. 1 overlapping entry adjusted."), "{screen}");
+            let data = today_file(&root);
+            assert!(data.contains(&format!("inc {} - {} # meetings", today_at(8, 0), today_at(10, 30))), "{data}");
+            assert!(data.contains(&format!("inc {} - {} # email", today_at(10, 30), today_at(11, 0))), "{data}");
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+
+    #[test]
+    fn focused_view_has_a_yellow_border() {
+        let root = sample_db("focus");
+        let mut app = App::new(root.clone());
+        press(&mut app, '1');
+        // color of the summary's top-left corner
+        let corner = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+            terminal.draw(|f| draw(f, app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let y = (0..buf.area.height).find(|&y| (0..20).any(|x| buf[(x, y)].symbol() == "S" && buf[(x + 1, y)].symbol() == "u")).unwrap();
+            assert_eq!(buf[(0, y)].symbol(), "╭");
+            buf[(0, y)].fg
+        };
+        assert_eq!(corner(&mut app), FOCUS, "the table has the focus");
+        press(&mut app, 'e');
+        assert_ne!(corner(&mut app), FOCUS, "the edit form has it");
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(corner(&mut app), FOCUS);
+        press(&mut app, 't');
+        assert_ne!(corner(&mut app), FOCUS, "the tag list has it");
+        key(&mut app, KeyCode::Esc);
+        press(&mut app, '?');
+        assert_ne!(corner(&mut app), FOCUS, "the legend has it");
+        let _ = fs::remove_dir_all(&root);
+    }
+
 }

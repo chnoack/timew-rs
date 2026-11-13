@@ -37,7 +37,7 @@ timew-rs/                    crate "timew-rs" (workspace root)
 ```
 
 The `timew-rs` crate builds a **library** and the **`timew-rs` binary**.
-`timew-tui` uses only the library, and only for reading. Keeping the TUI in
+`timew-tui` uses only the library. Keeping the TUI in
 its own crate means `ratatui` is never compiled into `timew-rs`.
 
 Dependencies are deliberately few:
@@ -158,5 +158,7 @@ cd /tmp/tw/test && for t in *.t; do python3 $t; done 2>&1 | grep -E '^(ok|not ok
 - **Changing data:** use `Session::add`/`delete`/`modify` between
   `s.journal.start()` and `s.journal.end()`, and call
   `validate::auto_adjust` before adding an interval that might overlap.
-- **The TUI** reads only through `Database::open`, `all_tracked`,
-  `tracked_in_range` and `summary::build`. It has no code that writes.
+- **The TUI** reads through `Database::open`, `all_tracked`,
+  `tracked_in_range` and `summary::build`. Its only write is
+  `timew_rs::modify_interval` (editing an entry), which goes through
+  `Session`, so it is journaled and checked for overlaps like a command.

@@ -103,3 +103,54 @@ fn run_inner(args: &[String], stdout: &mut String) -> Result<(i32, String), Stri
     session.db.commit()?;
     Ok((status, stderr))
 }
+
+/// Replace the stored interval `from` with `to`, the way `timew modify`
+/// does: an overlap with another interval is refused, or with `adjust`
+/// resolved like `:adjust` (the other intervals are shortened, split or
+/// deleted). The change is recorded in the undo journal (so `timew undo`
+/// reverts it) and the tag counts are kept up to date. Returns how many
+/// other intervals were adjusted. Used by `timew-tui` to edit entries.
+pub fn modify_interval(
+    paths: &paths::Paths,
+    from: &interval::Interval,
+    to: &interval::Interval,
+    adjust: bool,
+) -> Result<usize, String> {
+    if from == to {
+        return Ok(0);
+    }
+    let now = datetime::now();
+    if to.range.is_ended() && to.range.start >= to.range.end {
+        return Err("The end must be after the start.".to_string());
+    }
+    if to.range.is_open() && to.range.start > now {
+        return Err("A running entry cannot start in the future.".to_string());
+    }
+
+    let config = paths.config_file();
+    let mut rules = if config.exists() { rules::Rules::load(&config)? } else { rules::Rules::default() };
+    rules.set("verbose", "off");
+    let journal = journal::Journal::new(paths.data_dir().join("undo.data"), rules.get_int("journal.size", -1)?);
+    let (db, _, _) = database::Database::open_and_repair(paths.data_dir())?;
+    let mut s = Session {
+        cli: Cli::default(),
+        rules,
+        db,
+        journal,
+        extensions: extensions::Extensions::default(),
+        paths: paths.clone(),
+        out: String::new(),
+        now,
+    };
+    if !s.db.intervals()?.contains(from) {
+        return Err("The entry was changed by another program. Press r to reload.".to_string());
+    }
+    s.journal.start();
+    s.delete(from)?;
+    let overlapping = s.tracked_in(&to.range, &[])?.len();
+    validate::auto_adjust(&mut s, adjust, to)?;
+    s.add(to)?;
+    s.journal.end()?;
+    s.db.commit()?;
+    Ok(overlapping)
+}
