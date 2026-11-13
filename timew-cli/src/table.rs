@@ -6,7 +6,7 @@
 //! color, they are drawn underlined instead.
 
 use crate::color::Color;
-use crate::text::{display_width, left_justify, longest_line, longest_word, right_justify, strip_ansi, wrap_text};
+use crate::text::{display_width, is_plain_ascii, left_justify, longest_line, longest_word, right_justify, strip_ansi, wrap_text};
 
 pub struct Table {
     headers: Vec<String>,
@@ -46,9 +46,16 @@ impl Table {
         let mut ideal = minimal.clone();
         for row in &self.rows {
             for (c, (value, _)) in row.iter().enumerate() {
-                let plain = strip_ansi(value);
-                minimal[c] = minimal[c].max(longest_word(&plain));
-                ideal[c] = ideal[c].max(longest_line(&plain));
+                if is_plain_ascii(value) {
+                    // one column per byte, a single line
+                    let longest_word = value.split(' ').map(str::len).max().unwrap_or(0);
+                    minimal[c] = minimal[c].max(longest_word);
+                    ideal[c] = ideal[c].max(value.len());
+                } else {
+                    let plain = strip_ansi(value);
+                    minimal[c] = minimal[c].max(longest_word(&plain));
+                    ideal[c] = ideal[c].max(longest_line(&plain));
+                }
             }
         }
         let available = self.width as i64 - (n.saturating_sub(1)) as i64;
@@ -75,6 +82,14 @@ impl Table {
     }
 
     fn cell_lines(value: &str, width: usize, align_left: bool, color: &Color) -> Vec<String> {
+        if value.is_empty() {
+            return Vec::new();
+        }
+        if value.len() <= width && is_plain_ascii(value) {
+            // fits as it is: no wrapping needed
+            let justified = if align_left { left_justify(value, width) } else { right_justify(value, width) };
+            return vec![color.colorize(&justified)];
+        }
         wrap_text(value, width)
             .into_iter()
             .map(|line| {
@@ -119,6 +134,39 @@ impl Table {
         }
 
         for row in &self.rows {
+            // Fast path: every cell is empty or plain text that fits, so the
+            // row is one line and can be written directly.
+            let simple = row
+                .iter()
+                .enumerate()
+                .all(|(c, (value, _))| value.is_empty() || (value.len() <= widths[c] && is_plain_ascii(value)));
+            if simple {
+                if row.iter().all(|(value, _)| value.is_empty()) {
+                    continue; // a row without content takes no line
+                }
+                let start = out.len();
+                for (c, (value, color)) in row.iter().enumerate() {
+                    if c > 0 {
+                        out.push(' ');
+                    }
+                    let color = if self.color { *color } else { Color::none() };
+                    out.push_str(&color.code());
+                    let pad = widths[c] - value.len();
+                    if self.align_left[c] || value.is_empty() {
+                        out.push_str(value);
+                        out.extend(std::iter::repeat_n(' ', pad));
+                    } else {
+                        out.extend(std::iter::repeat_n(' ', pad));
+                        out.push_str(value);
+                    }
+                    out.push_str(color.end());
+                }
+                while out.len() > start && out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push('\n');
+                continue;
+            }
             let cells: Vec<Vec<String>> = row
                 .iter()
                 .enumerate()

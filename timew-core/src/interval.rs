@@ -204,7 +204,7 @@ impl Interval {
         }
 
         let tokens = tokenize(line)?;
-        if tokens.first().map(String::as_str) != Some("inc") {
+        if tokens.first().map(|t| t.as_ref()) != Some("inc") {
             return Err(format!("Unrecognizable line '{line}'."));
         }
 
@@ -216,7 +216,7 @@ impl Interval {
                 interval.range.start = parse_iso(tok)?;
                 idx += 1;
 
-                if tokens.get(idx).map(String::as_str) == Some("-")
+                if tokens.get(idx).map(|t| t.as_ref()) == Some("-")
                     && let Some(end_tok) = tokens.get(idx + 1)
                         && is_iso_token(end_tok) {
                             interval.range.end = parse_iso(end_tok)?;
@@ -224,17 +224,17 @@ impl Interval {
                         }
             }
 
-        if tokens.get(idx).map(String::as_str) == Some("#") {
+        if tokens.get(idx).map(|t| t.as_ref()) == Some("#") {
             idx += 1;
             while let Some(tok) = tokens.get(idx) {
                 if tok == "#" {
                     break;
                 }
-                interval.add_tag(tok.clone());
+                interval.add_tag(tok.to_string());
                 idx += 1;
             }
 
-            if tokens.get(idx).map(String::as_str) == Some("#") {
+            if tokens.get(idx).map(|t| t.as_ref()) == Some("#") {
                 idx += 1;
                 let annotation = tokens[idx..].join(" ");
                 interval.annotation = Some(annotation);
@@ -331,68 +331,52 @@ fn civil_from_epoch(epoch: Epoch) -> (i64, u32, u32, u32, u32, u32) {
 /// `inc ...` grammar only -- NOT a general command-line lexer (that's
 /// cli.rs's job, scoped separately since the full Lexer in the C++ source
 /// handles many more token types we don't need here).
-fn tokenize(line: &str) -> Result<Vec<String>, String> {
-    let mut tokens = Vec::new();
-    let chars: Vec<char> = line.chars().collect();
+/// Split a data line into tokens: words, `"quoted strings"` (with `\"`
+/// for a quote inside), and `#` / `-` on their own. Unquoted words and
+/// quoted strings without escapes are borrowed from the line.
+fn tokenize(line: &str) -> Result<Vec<std::borrow::Cow<'_, str>>, String> {
+    use std::borrow::Cow;
+    let bytes = line.as_bytes();
+    let mut tokens = Vec::with_capacity(8);
     let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if c.is_whitespace() {
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_whitespace() {
             i += 1;
             continue;
         }
-
-        if c == '"' {
-            let mut tok = String::new();
-            i += 1;
-            let mut closed = false;
-            while i < chars.len() {
-                if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1] == '"' {
-                    tok.push('"');
-                    i += 2;
-                    continue;
+        if c == b'"' {
+            let start = i + 1;
+            let mut j = start;
+            let mut escaped = false;
+            loop {
+                match bytes.get(j) {
+                    None => return Err(format!("Unterminated quoted string in '{line}'.")),
+                    Some(b'\\') if bytes.get(j + 1) == Some(&b'"') => {
+                        escaped = true;
+                        j += 2;
+                    }
+                    Some(b'"') => break,
+                    Some(_) => j += 1,
                 }
-                if chars[i] == '"' {
-                    closed = true;
-                    i += 1;
-                    break;
-                }
-                tok.push(chars[i]);
-                i += 1;
             }
-            if !closed {
-                return Err(format!("Unterminated quoted string in '{line}'."));
-            }
-            tokens.push(tok);
+            let body = &line[start..j];
+            tokens.push(if escaped { Cow::Owned(body.replace("\\\"", "\"")) } else { Cow::Borrowed(body) });
+            i = j + 1;
             continue;
         }
-
-        if c == '#' || c == '-' {
-            tokens.push(c.to_string());
+        if c == b'#' || c == b'-' {
+            tokens.push(Cow::Borrowed(&line[i..i + 1]));
             i += 1;
             continue;
         }
-
-        let mut tok = String::new();
-        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '"' {
-            // A bare '-' or '#' ends the current unquoted token, since those
-            // are structural delimiters in this grammar (matches the real
-            // tokenizer treating them as standalone tokens even when not
-            // separated by whitespace, e.g. "...# -tag" edge cases are not
-            // something real timew data ever produces, so we keep this
-            // simple and require delimiters to be whitespace-separated in
-            // practice).
-            if chars[i] == '#' {
-                break;
-            }
-            tok.push(chars[i]);
+        // A word, up to whitespace, a quote or a '#'.
+        let start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'"' && bytes[i] != b'#' {
             i += 1;
         }
-        tokens.push(tok);
+        tokens.push(Cow::Borrowed(&line[start..i]));
     }
-
     Ok(tokens)
 }
 

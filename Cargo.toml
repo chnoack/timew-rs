@@ -1,3 +1,12 @@
 [workspace]
 resolver = "3"
 members = ["timew-core", "timew-cli", "timew-tui"]
+
+# Release builds are optimized for speed: whole-program optimization (LTO)
+# in a single codegen unit, no unwinding code (a panic ends the program
+# right away), no symbol table.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

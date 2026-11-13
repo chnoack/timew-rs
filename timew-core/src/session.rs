@@ -114,7 +114,7 @@ impl Session {
     /// All intervals, newest first, with the running interval split at
     /// exclusions into synthetic pieces.
     pub fn tracked(&mut self) -> Result<Vec<Tracked>, String> {
-        let intervals = self.db.intervals()?;
+        let intervals = self.db.intervals()?.to_vec();
         let mut out = Vec::with_capacity(intervals.len() + 4);
         let mut iter = intervals.into_iter();
         if let Some(latest) = iter.next() {
@@ -199,7 +199,7 @@ impl Session {
         let tracked: Vec<Range> = self
             .db
             .intervals()?
-            .into_iter()
+            .iter()
             .filter(|i| range.is_unbounded() || i.range.intersects(range))
             .filter(|i| tags.iter().all(|t| i.has_tag(t)))
             .map(|i| i.range)

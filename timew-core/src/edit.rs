@@ -66,3 +66,38 @@ fn open_session(paths: &paths::Paths, now: range::Epoch) -> Result<Session, Stri
     let (db, _, _) = database::Database::open_and_repair(paths.data_dir())?;
     Ok(Session::new(rules, db, paths.clone(), now))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::datetime::make_local;
+    use crate::interval::{format_iso, Interval};
+    use crate::range::Range;
+
+    #[test]
+    fn edits_an_entry_written_differently_in_the_wrong_file() {
+        let root = std::env::temp_dir().join(format!("timew-core-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let (start, end) = (make_local(2026, 11, 2, 9, 0, 0), make_local(2026, 11, 2, 10, 0, 0));
+        // November entry, in the October file, tags unsorted and unquoted
+        let line = format!("inc {}  -  {} # zeta client-a\n", format_iso(start), format_iso(end));
+        std::fs::write(root.join("data/2026-10.data"), &line).unwrap();
+        let paths = paths::Paths { config_dir: root.clone(), db_dir: root.clone() };
+
+        let mut from = Interval::new(Range::new(start, end));
+        from.add_tag("zeta");
+        from.add_tag("client-a");
+        let mut to = from.clone();
+        to.range.end = end + 1800;
+        let (_, changes) = modify_interval(&paths, &from, &to, false).unwrap();
+        assert!(!root.join("data/2026-10.data").exists(), "the old file had only this entry");
+        let nov = std::fs::read_to_string(root.join("data/2026-11.data")).unwrap();
+        assert_eq!(nov, format!("inc {} - {} # \"client-a\" zeta\n", format_iso(start), format_iso(end + 1800)));
+
+        undo_change(&paths, &changes).unwrap();
+        let nov = std::fs::read_to_string(root.join("data/2026-11.data")).unwrap();
+        assert_eq!(nov, format!("inc {} - {} # \"client-a\" zeta\n", format_iso(start), format_iso(end)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

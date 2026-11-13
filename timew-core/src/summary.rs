@@ -51,9 +51,14 @@ pub fn build_at(range: &Range, tracked: &[Tracked], now: Epoch) -> Summary {
     let last_end = if range.is_ended() { range.end } else { tracked.last().unwrap().interval.range.end };
     let last_end = if last_end == 0 { now } else { last_end };
 
-    let mut rows: Vec<Row> = Vec::new();
+    let mut rows: Vec<Row> = Vec::with_capacity(tracked.len() + 8);
     let mut grand_total = 0;
     let mut day: Date = local(first_start).date();
+    // The intervals are normally sorted by start; then each day only needs
+    // to look at the ones from `first` on, up to the first one starting
+    // after the day. Otherwise every interval is checked on every day.
+    let sorted = tracked.windows(2).all(|w| w[0].interval.range.start <= w[1].interval.range.start);
+    let mut first = 0;
     loop {
         let day_start = midnight(day);
         if day_start >= last_end {
@@ -64,7 +69,20 @@ pub fn build_at(range: &Range, tracked: &[Tracked], now: Epoch) -> Summary {
         let first_row = rows.len();
         let mut daily_total = 0;
 
-        for (source, t) in tracked.iter().enumerate().filter(|(_, t)| day_range.intersects(&t.interval.range)) {
+        if sorted {
+            // skip what ended before this day (it can't touch later days either)
+            while let Some(t) = tracked.get(first) {
+                let r = &t.interval.range;
+                if r.is_ended() && r.end <= day_start && r.start < day_start {
+                    first += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        let candidates = tracked.iter().enumerate().skip(if sorted { first } else { 0 });
+        let candidates = candidates.take_while(|(_, t)| !sorted || t.interval.range.start < day_range.end);
+        for (source, t) in candidates.filter(|(_, t)| day_range.intersects(&t.interval.range)) {
             let iv = &t.interval;
             if iv.is_open() && day_start > now {
                 continue;
@@ -87,8 +105,8 @@ pub fn build_at(range: &Range, tracked: &[Tracked], now: Epoch) -> Summary {
                 id: format!("@{}", t.id),
                 tags: iv.tags.join(", "),
                 annotation: iv.annotation.clone().unwrap_or_default(),
-                start: datetime::format_time(part.start),
-                end: if iv.is_open() { "-".to_string() } else { datetime::format_time(part.end) },
+                start: time_of_day(part.start, &day_range),
+                end: if iv.is_open() { "-".to_string() } else { time_of_day(part.end, &day_range) },
                 time: format_hours(total),
                 total: String::new(),
                 source,
@@ -102,6 +120,16 @@ pub fn build_at(range: &Range, tracked: &[Tracked], now: Epoch) -> Summary {
         day = next;
     }
     Summary { rows, grand_total }
+}
+
+/// `datetime::format_time(t)` for a `t` within `day`, without a time zone
+/// lookup on days that have 24 hours (no daylight saving change).
+fn time_of_day(t: Epoch, day: &Range) -> String {
+    if day.end - day.start != 86400 {
+        return datetime::format_time(t);
+    }
+    let secs = (t - day.start).rem_euclid(86400);
+    format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
 
 fn midnight(day: Date) -> Epoch {

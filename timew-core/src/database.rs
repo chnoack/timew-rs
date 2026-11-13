@@ -61,7 +61,7 @@ impl Database {
             return Ok((db, notice, None));
         }
         db.tags = TagsDatabase::empty(&tags_path);
-        let intervals = db.intervals()?;
+        let intervals = db.intervals()?.to_vec();
         if !intervals.is_empty() {
             if !exists {
                 notice.push_str("Tags database does not exist. ");
@@ -91,23 +91,27 @@ impl Database {
         self.tags.tags()
     }
 
-    /// All intervals, newest first.
-    pub fn intervals(&mut self) -> Result<Vec<Interval>, String> {
-        if let Some(cache) = &self.cache {
-            return Ok(cache.clone());
-        }
-        let mut result = Vec::new();
-        for file in self.files.iter_mut().rev() {
-            let mut lines: Vec<String> = file.all_lines().map_err(|e| e.to_string())?.to_vec();
-            lines.sort();
-            for line in lines.iter().rev() {
-                if let Some(interval) = Interval::parse(line)? {
-                    result.push(interval);
+    /// All intervals, newest first. They are read once and kept until the
+    /// next change.
+    pub fn intervals(&mut self) -> Result<&[Interval], String> {
+        if self.cache.is_none() {
+            let mut result = Vec::new();
+            for file in self.files.iter_mut().rev() {
+                let lines = file.all_lines().map_err(|e| e.to_string())?;
+                // Files are written sorted; sort only if one isn't.
+                let mut order: Vec<&String> = lines.iter().collect();
+                if !lines.is_sorted() {
+                    order.sort();
+                }
+                for line in order.into_iter().rev() {
+                    if let Some(interval) = Interval::parse(line)? {
+                        result.push(interval);
+                    }
                 }
             }
+            self.cache = Some(result);
         }
-        self.cache = Some(result.clone());
-        Ok(result)
+        Ok(self.cache.as_deref().unwrap_or_default())
     }
 
     pub fn is_empty(&mut self) -> Result<bool, String> {
@@ -116,16 +120,16 @@ impl Database {
 
     /// The most recent interval, if any.
     pub fn latest(&mut self) -> Result<Option<Interval>, String> {
-        Ok(self.intervals()?.into_iter().next())
+        Ok(self.intervals()?.first().cloned())
     }
 
     /// All intervals with their IDs, newest first (no exclusion handling).
     pub fn all_tracked(&mut self) -> Result<Vec<Tracked>, String> {
         Ok(self
             .intervals()?
-            .into_iter()
+            .iter()
             .enumerate()
-            .map(|(i, interval)| Tracked { id: i as u32 + 1, interval, synthetic: false })
+            .map(|(i, interval)| Tracked { id: i as u32 + 1, interval: interval.clone(), synthetic: false })
             .collect())
     }
 
@@ -164,8 +168,25 @@ impl Database {
         Ok(new_tags)
     }
 
+    /// Delete `interval`. It is looked for in the file of the month it
+    /// starts in, and if it isn't there (a file written by another tool,
+    /// or by one that used other month boundaries), in all others.
     pub fn delete_interval(&mut self, interval: &Interval) -> Result<(), String> {
-        let idx = self.datafile_index_for(interval.range.start);
+        let expected = self.datafile_index_for(interval.range.start);
+        let mut idx = None;
+        if self.files[expected].contains(interval)? {
+            idx = Some(expected);
+        } else {
+            for i in 0..self.files.len() {
+                if i != expected && self.files[i].contains(interval)? {
+                    idx = Some(i);
+                    break;
+                }
+            }
+        }
+        let Some(idx) = idx else {
+            return Err(format!("Could not find the entry '{}' in any data file.", interval.serialize()));
+        };
         self.files[idx].delete_interval(interval)?;
         self.cache = None;
         for tag in &interval.tags {
@@ -381,4 +402,39 @@ mod tests {
         assert!(db.delete_interval(&b).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn deletes_lines_written_differently_and_misplaced_entries() {
+        let dir = tmp_dir("lenient-delete");
+        // tags out of order, a tag that should be quoted, extra spaces, CRLF
+        write_month_file(
+            &dir,
+            "2026-10.data",
+            &[
+                "inc 20261001T070000Z - 20261001T080000Z # zeta alpha",
+                "inc 20261002T070000Z  -  20261002T080000Z  #  client-a\r",
+                "inc 20261003T070000Z - 20261003T080000Z # keep",
+            ],
+        );
+        // an entry starting in November, but stored in the October file
+        let mut nov = std::fs::read_to_string(dir.join("2026-10.data")).unwrap();
+        let nov_start = crate::interval::format_iso(make_local(2026, 11, 2, 9, 0, 0));
+        let nov_end = crate::interval::format_iso(make_local(2026, 11, 2, 10, 0, 0));
+        nov.push_str(&format!("inc {nov_start} - {nov_end} # misplaced\n"));
+        fs::write(dir.join("2026-10.data"), nov).unwrap();
+
+        let mut db = Database::open(&dir).unwrap();
+        let all = db.intervals().unwrap().to_vec();
+        assert_eq!(all.len(), 4);
+        for interval in all.iter().filter(|i| !i.has_tag("keep")) {
+            db.delete_interval(interval).unwrap();
+        }
+        db.commit().unwrap();
+        let left = fs::read_to_string(dir.join("2026-10.data")).unwrap();
+        assert_eq!(left, "inc 20261003T070000Z - 20261003T080000Z # keep\n", "other lines are kept as they are");
+        let ghost = iv("20261005T070000Z", "20261005T080000Z", "ghost");
+        assert!(db.delete_interval(&ghost).unwrap_err().contains("Could not find the entry"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 }

@@ -9,8 +9,16 @@ pub fn char_width(c: char) -> usize {
     c.width().unwrap_or(0)
 }
 
+/// Printable ASCII only (no color codes, no newlines): one column per byte.
+pub fn is_plain_ascii(s: &str) -> bool {
+    s.bytes().all(|b| (0x20..0x7f).contains(&b))
+}
+
 /// Number of terminal columns `s` occupies, ignoring ANSI color codes.
 pub fn display_width(s: &str) -> usize {
+    if is_plain_ascii(s) {
+        return s.len();
+    }
     strip_ansi(s).chars().map(char_width).sum()
 }
 
@@ -34,22 +42,32 @@ pub fn strip_ansi(s: &str) -> String {
 
 pub fn left_justify(s: &str, width: usize) -> String {
     let pad = width.saturating_sub(display_width(s));
-    format!("{s}{}", " ".repeat(pad))
+    let mut out = String::with_capacity(s.len() + pad);
+    out.push_str(s);
+    out.extend(std::iter::repeat_n(' ', pad));
+    out
 }
 
 pub fn right_justify(s: &str, width: usize) -> String {
     let pad = width.saturating_sub(display_width(s));
-    format!("{}{s}", " ".repeat(pad))
+    let mut out = String::with_capacity(s.len() + pad);
+    out.extend(std::iter::repeat_n(' ', pad));
+    out.push_str(s);
+    out
+}
+
+fn width_of(s: &str) -> usize {
+    if s.is_ascii() { s.len() } else { s.chars().map(char_width).sum() }
 }
 
 /// Width of the longest space-separated word.
 pub fn longest_word(s: &str) -> usize {
-    s.split(' ').map(|w| w.chars().map(char_width).sum()).max().unwrap_or(0)
+    s.split(' ').map(width_of).max().unwrap_or(0)
 }
 
 /// Width of the longest line.
 pub fn longest_line(s: &str) -> usize {
-    s.split('\n').map(|l| l.chars().map(char_width).sum()).max().unwrap_or(0)
+    s.split('\n').map(width_of).max().unwrap_or(0)
 }
 
 /// Break `text` into lines of at most `width` columns. Lines break at the

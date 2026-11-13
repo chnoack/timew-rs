@@ -97,13 +97,28 @@ impl Datafile {
     /// no matching line is found (mirrors the C++ source throwing in this
     /// case -- callers are expected to only delete intervals they know
     /// exist).
+    /// The line holding `interval`: written exactly as `timew` writes it, or
+    /// written differently but meaning the same (other tag order, missing
+    /// quotes, extra spaces, …), as files edited by hand or by other tools
+    /// may be.
+    fn find(&self, interval: &Interval) -> Option<usize> {
+        let serialized = interval.serialize();
+        self.lines.iter().position(|l| *l == serialized).or_else(|| {
+            self.lines.iter().position(|l| matches!(Interval::parse(l), Ok(Some(parsed)) if parsed == *interval))
+        })
+    }
+
+    /// Whether the file holds `interval` (see `find`).
+    pub fn contains(&mut self, interval: &Interval) -> Result<bool, String> {
+        self.ensure_loaded().map_err(|e| e.to_string())?;
+        Ok(self.find(interval).is_some())
+    }
+
     pub fn delete_interval(&mut self, interval: &Interval) -> Result<(), String> {
         self.ensure_loaded().map_err(|e| e.to_string())?;
-
-        let serialized = interval.serialize();
-        let pos = self.lines.iter().position(|l| l == &serialized).ok_or_else(|| {
-            format!("Datafile::delete_interval failed to find '{serialized}'")
-        })?;
+        let pos = self
+            .find(interval)
+            .ok_or_else(|| format!("Could not find '{}' in {}.", interval.serialize(), self.path.display()))?;
         self.lines.remove(pos);
         self.dirty = true;
         Ok(())

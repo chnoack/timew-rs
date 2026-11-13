@@ -39,8 +39,46 @@ pub fn now() -> Epoch {
     Timestamp::now().as_second()
 }
 
+/// The system time zone, looked up once per run (looking it up is much
+/// slower than using it, and reports convert thousands of times).
 fn tz() -> TimeZone {
-    TimeZone::system()
+    static TZ: std::sync::OnceLock<TimeZone> = std::sync::OnceLock::new();
+    TZ.get_or_init(system_time_zone).clone()
+}
+
+/// The system time zone, read straight from its zone file: `$TZ` naming a
+/// zone (`Europe/Berlin`, `:Europe/Berlin` or a path), else
+/// `/etc/localtime`. This is the same data `jiff` would use, but much
+/// faster than `TimeZone::system()`, which first searches the time zone
+/// database. Anything else (such as a POSIX rule in `$TZ`) goes to `jiff`.
+fn system_time_zone() -> TimeZone {
+    use std::path::{Path, PathBuf};
+    let zoneinfo = std::env::var_os("TZDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/usr/share/zoneinfo"));
+    let load = |name: &str, path: &Path| std::fs::read(path).ok().and_then(|bytes| TimeZone::tzif(name, &bytes).ok());
+    let found = match std::env::var("TZ") {
+        Ok(tz) if !tz.is_empty() => {
+            let name = tz.strip_prefix(':').unwrap_or(&tz);
+            let is_name = name.split('/').all(|part| !part.is_empty() && part != ".." && part.chars().all(|c| c.is_ascii_alphanumeric() || "_-+".contains(c)));
+            if name.starts_with('/') {
+                load(name.rsplit_once("zoneinfo/").map_or(name, |(_, n)| n), Path::new(name))
+            } else if is_name {
+                load(name, &zoneinfo.join(name))
+            } else {
+                None
+            }
+        }
+        Err(std::env::VarError::NotPresent) => {
+            let link = std::fs::read_link("/etc/localtime").ok();
+            let name = link
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .and_then(|p| p.rsplit_once("zoneinfo/"))
+                .map_or("Local".to_string(), |(_, n)| n.to_string());
+            load(&name, Path::new("/etc/localtime"))
+        }
+        _ => None,
+    };
+    found.unwrap_or_else(TimeZone::system)
 }
 
 /// The local date and time of an instant.
