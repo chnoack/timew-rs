@@ -15,27 +15,19 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     let out = &mut s.out;
     let mut confirm_fn = |q: &str| !ask || confirm(out, q);
 
-    s.journal.start();
     let (changed, rc) = if words.len() > 1 {
         let value = dequote(&words[1..].join(" ")).to_string();
         match set_config_variable(&rules, &name, &value, &mut confirm_fn)? {
-            Some(change) => {
-                s.journal.record_config(change.before, change.after);
-                (true, 0)
-            }
+            Some(_) => (true, 0),
             None => (false, 1),
         }
     } else {
         match unset_config_variable(&rules, &name, &mut confirm_fn)? {
-            Unset::Removed(change) => {
-                s.journal.record_config(change.before, change.after);
-                (true, 0)
-            }
+            Unset::Removed(_) => (true, 0),
             Unset::Declined => (false, 1),
             Unset::NotFound => return Err(format!("No entry named '{name}' found.")),
         }
     };
-    s.journal.end()?;
     if s.verbose() {
         if changed {
             s.out.push_str(&format!("Config file '{}' modified.\n", s.rules.file().display()));

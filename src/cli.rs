@@ -24,7 +24,7 @@ use crate::text::auto_complete;
 pub const COMMANDS: &[&str] = &[
     "annotate", "cancel", "config", "continue", "delete", "diagnostics", "export", "extensions", "fill", "gaps",
     "get", "help", "--help", "-h", "import", "join", "lengthen", "modify", "move", "report", "resize", "retag",
-    "shorten", "show", "split", "start", "stop", "tag", "tags", "track", "undo", "untag",
+    "shorten", "show", "split", "start", "stop", "tag", "tags", "track", "untag",
 ];
 
 /// Reports that are built in but behave like extensions.

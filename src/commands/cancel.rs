@@ -12,9 +12,7 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
             return Ok(0);
         }
     };
-    s.journal.start();
     s.delete(&latest)?;
-    s.journal.end()?;
     if s.verbose() {
         s.out.push_str("Canceled active time tracking.\n");
     }

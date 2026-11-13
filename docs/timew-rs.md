@@ -1,9 +1,10 @@
 # timew-rs command reference
 
 `timew-rs` is a replacement for the `timew` command. It implements all of
-Timewarrior's commands, reads and writes the same files, and its output
-matches `timew` (Timewarrior 1.10). It passes Timewarrior's own test
-suite. The places where it deliberately behaves differently are listed in
+Timewarrior's commands except `undo`, reads and writes the same files
+(except the undo journal), and its output matches `timew` (Timewarrior
+1.10). It passes Timewarrior's own test suite, apart from the `undo`
+tests. The places where it deliberately behaves differently are listed in
 [Differences from Timewarrior](#differences-from-timewarrior).
 
 ```
@@ -166,7 +167,6 @@ interval.
 | `split @<id> ...` | Split into two halves. |
 | `join @<id> @<id>` | Merge two intervals, with the tags of both. |
 | `fill [@<id>]` | Extend to the neighboring intervals. |
-| `undo` | Revert the last command that changed something (intervals or configuration). |
 | `import [<file> ...]` | Add intervals from JSON (the `export` format), from files or stdin. |
 
 ## Reports
@@ -273,10 +273,8 @@ These are deliberate; most fix something the original gets wrong.
   contain no color codes.
 - `exclusions.days.<date> = on|off` works as documented (Timewarrior
   treats both as days off).
-- `undo` reverts the actions of a command in reverse order, which also
-  works after a running interval was split at exclusions, and skips
-  commands that changed nothing. Undoing a configuration change restores
-  the line exactly.
+- There is no `undo` command, and no undo journal (`data/undo.data`) is
+  written or read. Changes are final; `timew-tui` can undo its last edit.
 - `config <name>` removes the line instead of leaving it blank; values are
   written as given.
 - `lengthen`, `shorten` and `resize` require a duration, and `move` a date

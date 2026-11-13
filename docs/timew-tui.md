@@ -2,8 +2,8 @@
 
 A terminal UI for browsing a Timewarrior database. It shows the same rows
 as `timew summary`, with filters you can switch with single keys or the
-mouse, and lets you change when an entry starts and ends (`e`). Nothing
-else is ever changed.
+mouse, and lets you change an entry's start, end, tags and annotation
+(`e`). Nothing else is ever changed.
 
 ```sh
 cargo build --release -p timew-tui
@@ -85,14 +85,15 @@ terminal switches immediately.
 
 ### Editing an entry
 
-`e` turns the details panel of the selected entry into a form (in a narrow
-window it opens below the table):
+`e` turns the details panel of the selected entry into a form for its
+tags, annotation, start and end (in a narrow window it opens below the
+table):
 
 ```
 ╭ Edit entry ─────────────────────────────────╮
 │  ID         @2                              │
-│  Tags       meetings                        │
-│  Annotation (none)                          │
+│  Tags        meetings                       │
+│  Annotation                                 │
 │                                             │
 │  Start       2026-11-13   08:00             │
 │  End         2026-11-13   10:00             │
@@ -109,18 +110,33 @@ window it opens below the table):
   time you don't change keeps its seconds. An empty end date means the day
   the entry starts.
 - For the running entry, leave both end fields empty to keep it running.
+- **Tags** are a plain text field: tags separated by spaces, a tag with a
+  space in double quotes (`"client a" meetings`). Typing inserts at the
+  cursor; a long line scrolls sideways. `↑` from the start date or
+  `Shift+Tab` gets there; an empty field removes all tags. New tags are
+  added to `tags.data` like with `timew-rs tag`.
+- **Annotation** is a plain text field too (`↑` from the start date gets
+  there). Any text is fine, including quotes; leading and trailing spaces
+  are dropped, and an empty field removes the annotation.
 - The duration updates while you type.
 - `Enter` saves. The change is made the way `timew-rs modify` makes it: an
   end before the start, or an overlap with another entry, is refused with
   a message in the form (which stays open). Otherwise the change is
-  written, recorded in the undo journal, so **`timew-rs undo`** (or
-  `timew undo`) reverts it, and the entry stays selected. The status line
-  confirms the save.
+  written, the entry stays selected, and the status line confirms the
+  save.
 - **`Shift+Enter`** saves even if the entry now overlaps others, and
   adjusts them like `timew-rs modify … :adjust`: an entry it overlaps at
   one end is shortened, one it covers completely is deleted, one it lies
   inside is split around it. The status line says how many were adjusted,
-  and `timew-rs undo` reverts all of it at once.
+  and an undo reverts all of it at once.
+- **`u` undoes** the last saved edit, including any adjusted entries. Only
+  the last one: after an undo (or a restart) there is nothing more to
+  undo, and a new edit replaces the remembered one. `u undo` appears at
+  the start of the help line only while there is an edit to undo. The edit
+  is remembered in memory only; nothing like an undo file is written. `u`
+  refuses ("Not undone: …") and changes nothing if another program changed
+  the entries the edit left behind, or if the restored entry would overlap
+  one added since.
   Many terminals send the same code for `Shift+Enter` as for `Enter`;
   timew-tui turns on the extended keyboard protocol where the terminal
   supports it (kitty, WezTerm, foot, Ghostty, …). **`Alt+Enter`** does the
@@ -193,7 +209,8 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `PgUp` `PgDn` / `Space` | Move a page |
 | `Home` `End` / `g` `G` | First or last row |
 | `Enter` / `i` | Open or close the details (narrow layout) |
-| `e` | **Edit** the start and end of the selected entry |
+| `e` | **Edit** the start, end, tags and annotation of the selected entry |
+| `u` | **Undo** the last saved edit (only shown while there is one) |
 | `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
 | `1` / `d` | Today |
 | `2` / `y` | Yesterday |
@@ -231,7 +248,7 @@ legend (`?`) works the same way.
 | **Year list** (Shift+4) | The current year and the four before it, newest first · `↑↓`/`jk` and `g`/`G` move · `Enter`/`Space` select · `⌫` **current year** (same as `4`) · `Esc`/`q` close |
 | **Tag list** (`t`) | "All tags" plus every tag in the database with its entry count · `↑↓`/`jk`, `PgUp`/`PgDn` and `g`/`G` move · `Enter`/`Space` select · `⌫` **remove the tag filter** · `Esc`/`q`/`t` close |
 | **Date range** (`c`) | Type into **From**/**To** · `Tab`/`↑↓` or a click switches fields · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` apply · `Esc` cancel |
-| **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous · typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`) · `←→`, `Home`/`End` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
+| **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous (start date, start time, end date, end time, tags, annotation) · in dates and times typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`); in the tags and the annotation it inserts · `←→`, `Home`/`End` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
 
 Each list opens on the current choice: the month or year being shown, or the
 active tag.
@@ -305,12 +322,16 @@ form, key legend, tag list, month list, year list, range form. Only if none
 is open does it reach the main view. `Ctrl+C` is handled before all of
 them.
 
-Saving an edit calls `timew_rs::modify_interval(paths, original, edited)`.
+Saving an edit calls `timew_rs::modify_interval(paths, original, edited, adjust)`.
 It opens the configuration and the database like `timew-rs` does, checks
 that the entry is still stored unchanged (otherwise it asks for a reload
 with `r`), deletes it, checks the edited one for overlaps with
-`validate::auto_adjust`, adds it, writes the undo journal and commits. If
-anything fails, nothing is written.
+`validate::auto_adjust`, adds it and commits. If anything fails, nothing
+is written. It returns every change it made (`session::Change`: an
+interval before and after), which the TUI keeps in `App::last_edit`; `u`
+passes them to `timew_rs::undo_change`, which reverts them, last first,
+only if the intervals they left behind are still stored unchanged and the
+restored ones overlap nothing.
 
 ### Drawing
 

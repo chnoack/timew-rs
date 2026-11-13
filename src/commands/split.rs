@@ -10,7 +10,6 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
         return Err("IDs must be specified. See 'timew help split'.".to_string());
     }
     let adjust = s.cli.has_hint("adjust");
-    s.journal.start();
     s.flatten_latest()?;
     for t in s.tracked_ids(&ids)? {
         let end = if t.interval.is_open() { s.now } else { t.interval.range.end };
@@ -28,6 +27,5 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
             s.out.push_str(&format!("Split @{}\n", t.id));
         }
     }
-    s.journal.end()?;
     Ok(0)
 }

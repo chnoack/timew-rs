@@ -28,7 +28,6 @@ pub mod summary;
 pub mod tag;
 pub mod tags;
 pub mod track;
-pub mod undo;
 
 use crate::color::Color;
 use crate::datetime::{self, format_local_iso, local};
@@ -78,7 +77,6 @@ pub fn dispatch(s: &mut Session) -> Result<i32, String> {
         "tag" => tag::run(s, tag::Change::Tag),
         "tags" => tags::run(s),
         "track" => track::run(s),
-        "undo" => undo::run(s),
         "untag" => tag::run(s, tag::Change::Untag),
         _ => report::run(s),
     }

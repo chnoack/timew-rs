@@ -42,11 +42,9 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     };
 
     interval.range = if range.is_started() { range } else { Range::new(s.now, 0) };
-    s.journal.start();
     if auto_adjust(s, s.cli.has_hint("adjust"), &interval)? {
         s.add(&interval)?;
     }
-    s.journal.end()?;
     if s.verbose() {
         let text = super::summarize(&s.rules, &interval, s.now);
         s.out.push_str(&text);

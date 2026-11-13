@@ -1,6 +1,7 @@
 //! End-to-end tests of the `timew-rs` binary in throwaway databases. The
 //! expected outputs were captured from the original `timew` (1.10.0-dev)
-//! with `TZ=Europe/Berlin` and an 80 column terminal.
+//! with `TZ=Europe/Berlin` and an 80 column terminal. (`timew-rs` has no
+//! `undo` and writes no `undo.data`.)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -153,13 +154,11 @@ fn overlaps_and_adjust() {
 }
 
 #[test]
-fn stopping_some_tags_and_undo() {
+fn stopping_some_tags() {
     let db = Db::new();
     db.ok(&["start", "2025-03-03T12:00", "x", "y"]);
     let out = db.ok(&["stop", "2025-03-03T12:30", "x"]);
     assert!(out.starts_with("Recorded x y\n  Started 2025-03-03T12:00:00\n  Ended                 30:00\n  Total               0:30:00\n\nTracking y\n"));
-    db.ok(&["stop", "2025-03-03T13:00"]);
-    assert_eq!(db.ok(&["undo"]), "Undo\n");
     assert_eq!(
         db.ok(&["export", "2025-03-03T12:00", "-", "2025-03-03T14:00"]),
         concat!(
@@ -170,10 +169,17 @@ fn stopping_some_tags_and_undo() {
         )
     );
     assert_eq!(db.fail(&["stop", "2025-03-03T13:00", "z"]), "The current interval does not have the 'z' tag.\n");
-    db.ok(&["undo"]);
-    db.ok(&["undo"]);
-    assert_eq!(db.ok(&["undo"]), "Nothing to undo.\n");
-    assert_eq!(db.ok(&["export"]), "[\n]\n");
+    db.ok(&["stop", "2025-03-03T13:00"]);
+    assert_eq!(db.fail(&["stop"]), "There is no active time tracking.\n");
+}
+
+#[test]
+fn no_undo_and_no_journal() {
+    let db = Db::new();
+    db.ok(&["track", "2025-03-03T08:00", "-", "2025-03-03T09:00", "foo"]);
+    db.ok(&["config", "name", "value", ":yes"]);
+    assert!(!db.path().join("data/undo.data").exists());
+    assert_eq!(db.fail(&["undo"]), "'undo' is not a timew command. See 'timew help'.\n");
 }
 
 #[test]
@@ -241,8 +247,6 @@ fn configuration() {
     assert_eq!(db.ok(&["get", "dom.rc.tags.foo.description", "dom.rc.nothing"]), "A foo \n");
     db.ok(&["config", "name", ":yes"]);
     assert!(!db.file("timewarrior.cfg").contains("name"));
-    db.ok(&["undo"]);
-    assert!(db.file("timewarrior.cfg").contains("name = value"));
     assert_eq!(db.ok(&["rc.verbose=off", "track", "2025-03-03T08:00", "-", "2025-03-03T09:00", "foo"]), "");
 }
 

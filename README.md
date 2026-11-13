@@ -6,10 +6,10 @@ that data and correcting start and end times.
 
 > **Status:** `timew-rs` implements all of Timewarrior's commands: tracking
 > (`start`, `stop`, `track`, `continue`, …), editing (`modify`, `move`,
-> `tag`, `join`, `split`, `undo`, …), the reports (`summary`, `day`,
-> `week`, `month`, `gaps`, …), extensions and configuration. It passes
-> Timewarrior's own test suite. `timew-tui` browses the data and can edit
-> the start and end of an entry.
+> `tag`, `join`, `split`, …), the reports (`summary`, `day`,
+> `week`, `month`, `gaps`, …), extensions and configuration, except
+> `undo`. It passes Timewarrior's own test suite (apart from the `undo`
+> tests). `timew-tui` browses the data and can edit entries.
 
 ```
  timew-tui   ./examples/pm-2025
@@ -103,7 +103,8 @@ Press Shift+4 and pick 2025, or press `c` and enter `:lastyear`.
 
 `timew-rs` behaves like the `timew` command: same commands, same output,
 same files. It was compared against the real `timew` byte for byte, and it
-passes Timewarrior's own test suite.
+passes Timewarrior's own test suite (apart from the `undo` tests: there is
+no `undo` command and no undo journal).
 
 ```sh
 timew-rs start meetings client-a          # start tracking now
@@ -113,20 +114,19 @@ timew-rs summary :week                    # this week's table
 timew-rs week                             # this week's chart
 timew-rs tag @2 budget                    # add a tag to the 2nd most recent
 timew-rs modify end @1 16:45              # fix an end time
-timew-rs undo                             # revert the last change
 ```
 
 | Group | Commands |
 | --- | --- |
 | Tracking | `start`, `stop`, `track`, `continue`, `cancel` |
-| Editing | `annotate`, `tag`, `untag`, `retag`, `delete`, `modify`, `move`, `lengthen`, `shorten`, `resize`, `split`, `join`, `fill`, `undo`, `import` |
+| Editing | `annotate`, `tag`, `untag`, `retag`, `delete`, `modify`, `move`, `lengthen`, `shorten`, `resize`, `split`, `join`, `fill`, `import` |
 | Reports | `summary`, `day`, `week`, `month`, `gaps`, `tags`, `export`, `get`, extension reports |
 | Other | `config`, `show`, `extensions`, `diagnostics`, `help` |
 
 Dates can be ISO (`2025-03-01T08:00`), informal (`8am`, `yesterday`,
 `monday`, `eom`) or range hints (`:week`, `:lastmonth`), durations
 `1h`, `30min`. The configuration (`timewarrior.cfg`), exclusions, holidays,
-tag colors and the undo journal work as in Timewarrior. The database is
+and tag colors work as in Timewarrior (there is no `undo`; see below). The database is
 found the same way (`$TIMEWARRIORDB`, `~/.timewarrior`, or the XDG
 directories). Full reference, including the few deliberate differences:
 [docs/timew-rs.md](docs/timew-rs.md).
@@ -148,9 +148,9 @@ A separate program for browsing the summary interactively:
 - **Filters:** quick buttons for day, yesterday, month and year, plus lists
   to pick a month (Shift+3) or one of the last 5 years (Shift+4), a form for
   your own date range (`5`), and a tag list (`6`).
-- **Editing:** `e` edits the start and end date and time of the selected
-  entry in the details panel. Overlaps are refused, or adjusted with
-  Shift+Enter (or Alt+Enter), and `timew-rs undo` reverts a change.
+- **Editing:** `e` edits the start and end date and time, the tags and the
+  annotation of the selected entry in the details panel. Overlaps are refused, or adjusted with
+  Shift+Enter (or Alt+Enter), and `u` undoes the last edit.
 
 Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/timew-tui.md).
 
@@ -161,7 +161,7 @@ Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/t
 | [docs/architecture.md](docs/architecture.md) | Crate and module layout, data flow, the invariants the code relies on, the test approach |
 | [docs/timew-rs.md](docs/timew-rs.md) | CLI reference: commands, dates, ranges, hints, configuration, differences from Timewarrior |
 | [docs/timew-tui.md](docs/timew-tui.md) | TUI user guide (keys, filters, layouts) and how it is built internally |
-| [docs/data-format.md](docs/data-format.md) | The on-disk format: directory layout, `.data` lines, `tags.data`, `undo.data`, `timewarrior.cfg`, IDs |
+| [docs/data-format.md](docs/data-format.md) | The on-disk format: directory layout, `.data` lines, `tags.data`, `timewarrior.cfg`, IDs |
 | [docs/example-data.md](docs/example-data.md) | The example data generator and the included data sets |
 
 ## Relationship to Timewarrior
@@ -170,7 +170,8 @@ This is a clean-room reimplementation. The behavior was worked out by reading
 the Timewarrior C++ source (GothenburgBitFactory/timewarrior, `develop`
 branch, commit `3699d2e`) and its tests, and by comparing against the real
 `timew` binary. The tests in `tests/cli.rs` contain output captured from
-`timew`, and `timew-rs` passes Timewarrior's Python test suite. The two
+`timew`, and `timew-rs` passes Timewarrior's Python test suite (except
+for `undo`). The two
 programs share the same files, so `timew-rs` and `timew-tui` can be used on
 an existing Timewarrior database, and Timewarrior can keep using a database
 that `timew-rs` wrote to.

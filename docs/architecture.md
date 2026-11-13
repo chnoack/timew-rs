@@ -11,7 +11,7 @@ timew-rs/                    crate "timew-rs" (workspace root)
 │   ├── main.rs              the timew-rs binary: calls timew_rs::run, prints
 │   ├── lib.rs               startup: hints, paths, configuration, database
 │   ├── cli.rs               classifies arguments; the range grammar
-│   ├── session.rs           one run: database + config + journal + output
+│   ├── session.rs           one run: database + config + output; records changes
 │   ├── validate.rs          overlaps (:adjust) and :fill
 │   ├── commands/            one module per command (dispatch in mod.rs)
 │   ├── datetime.rs          date parsing, local calendar math, range hints
@@ -21,7 +21,6 @@ timew-rs/                    crate "timew-rs" (workspace root)
 │   ├── datafile.rs          one YYYY-MM.data file; atomic writes
 │   ├── database.rs          all datafiles + tags.data; IDs
 │   ├── tags.rs              tags.data (tag -> usage count)
-│   ├── journal.rs           undo.data
 │   ├── rules.rs             timewarrior.cfg: defaults, parsing, editing
 │   ├── paths.rs             where config and data live; first-run setup
 │   ├── exclusion.rs         exclusions and holidays
@@ -45,7 +44,7 @@ Dependencies are deliberately few:
 | Crate | Used for |
 | --- | --- |
 | `jiff` | Time zones, local-time calendar math, ISO week numbers |
-| `serde`, `serde_json` | Reading JSON (`tags.data`, `import`, the undo journal) |
+| `serde`, `serde_json` | Reading JSON (`tags.data`, `import`) |
 | `unicode-width` | Display width of characters in tables and charts |
 | `ratatui` (TUI only) | Terminal UI widgets; its bundled `crossterm` handles terminal input/output |
 
@@ -62,7 +61,7 @@ main.rs ── timew_rs::run(args)
              ├─ cli::Cli::parse            again, now knowing the extensions
              └─ commands::dispatch(&mut Session)
                     │  reads:   session.tracked*, exclusions, rules
-                    │  writes:  session.add / delete / modify  (journal + "new tag" notes)
+                    │  writes:  session.add / delete / modify  ("new tag" notes)
                     └─ on success: database.commit()   (datafiles, tags.data)
 ```
 
@@ -71,9 +70,9 @@ main.rs ── timew_rs::run(args)
   `Err(String)`, printed to stderr, and give exit status 255; on an error
   the database is not committed.
 - **`Session`** is the only place that changes intervals: `add`, `delete`
-  and `modify` record each change in the undo journal and print the "new
-  tag" notes. Commands that change something call `journal.start()` and
-  `journal.end()` around their changes.
+  and `modify` record each change in `Session::changes` (in memory only;
+  `timew-tui` uses it to undo an edit) and print the "new tag" notes.
+  There is no undo journal.
 - **Reading** goes through `Session::tracked()` (all intervals with IDs,
   newest first), `tracked_in(range, tags)` and `tracked_ids(ids)` (both
   oldest first). These include the synthetic pieces of a running interval
@@ -122,7 +121,7 @@ cargo test --workspace
 
 - **Library (unit tests in each module):** date and duration parsing,
   range arithmetic, the configuration parser, colors, table layout, the
-  journal, the database files.
+  the database files.
 - **Command line (`tests/cli.rs`):** runs the `timew-rs` binary in
   throwaway databases (with `TZ=Europe/Berlin`, 80 columns) and compares
   output and files with what the original `timew` produced for the same
@@ -139,8 +138,9 @@ cargo test --workspace
 ### Timewarrior's own test suite
 
 `timew-rs` also passes the Python test suite of the original project
-(`test/*.t` in the Timewarrior repository; the exceptions are tests that
-fail for the original too, such as those needing installed man pages).
+(`test/*.t` in the Timewarrior repository; the exceptions are `undo.t`,
+since there is no `undo` command, and tests that fail for the original
+too, such as those needing installed man pages).
 The suite runs `../../src/timew` relative to its `basetest` directory, so
 point that at `timew-rs`:
 
@@ -155,10 +155,10 @@ cd /tmp/tw/test && for t in *.t; do python3 $t; done 2>&1 | grep -E '^(ok|not ok
 - **A new command:** add `commands/<name>.rs` with
   `pub fn run(s: &mut Session) -> Result<i32, String>`, register it in
   `commands/mod.rs` (`dispatch`) and add its name to `cli::COMMANDS`.
-- **Changing data:** use `Session::add`/`delete`/`modify` between
-  `s.journal.start()` and `s.journal.end()`, and call
+- **Changing data:** use `Session::add`/`delete`/`modify`, and call
   `validate::auto_adjust` before adding an interval that might overlap.
 - **The TUI** reads through `Database::open`, `all_tracked`,
   `tracked_in_range` and `summary::build`. Its only write is
   `timew_rs::modify_interval` (editing an entry), which goes through
-  `Session`, so it is journaled and checked for overlaps like a command.
+  `Session`, so it is checked for overlaps like a command; its
+  `undo_change` reverts the last edit.

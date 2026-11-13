@@ -19,7 +19,6 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     for tag in s.cli.tags() {
         interval.add_tag(tag);
     }
-    s.journal.start();
     if s.cli.has_hint("fill") {
         fill(s, &mut interval, 0)?;
     }
@@ -32,6 +31,5 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
             s.out.push_str(&text);
         }
     }
-    s.journal.end()?;
     Ok(0)
 }

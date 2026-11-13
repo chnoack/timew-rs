@@ -12,7 +12,6 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     let Some(&id) = ids.iter().next() else {
         return Err("ID must be specified. See 'timew help move'.".to_string());
     };
-    s.journal.start();
     s.flatten_latest()?;
     let original = s.tracked_ids(&ids)?.remove(0).interval;
     let Some(date) = s.cli.dates().pop() else {
@@ -28,7 +27,6 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     s.delete(&original)?;
     auto_adjust(s, s.cli.has_hint("adjust"), &moved)?;
     s.add(&moved)?;
-    s.journal.end()?;
     if s.verbose() {
         s.out.push_str(&format!("Moved @{id} to {}\n", crate::datetime::format_local_iso(moved.range.start)));
     }

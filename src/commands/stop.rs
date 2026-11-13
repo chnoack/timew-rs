@@ -35,7 +35,6 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     };
     let adjust = s.cli.has_hint("adjust");
 
-    s.journal.start();
     if remaining.is_empty() {
         let mut stopped = latest.clone();
         stopped.range.end = range.start;
@@ -64,6 +63,5 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
             s.out.push_str(&text);
         }
     }
-    s.journal.end()?;
     Ok(0)
 }

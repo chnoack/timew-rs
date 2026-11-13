@@ -164,7 +164,7 @@ impl Interval {
     /// `.data` files exist in practice (we hit exactly this with imported
     /// data).
     /// Read an interval from its JSON form (as written by `to_json`, by
-    /// `export` and in the undo journal). Returns the interval and its id
+    /// `export` and by `import`). Returns the interval and its id
     /// (0 if absent). An empty string is the empty interval.
     pub fn from_json(json: &str) -> Result<(Interval, u32), String> {
         if json.trim().is_empty() {

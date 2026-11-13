@@ -66,7 +66,6 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("theme.colors.today", "white"),
     ("theme.colors.holiday", "gray4"),
     ("theme.colors.label", "gray4"),
-    ("journal.size", "-1"),
 ];
 
 /// The lines a new configuration file starts with.
@@ -222,7 +221,7 @@ impl Rules {
     }
 }
 
-/// A change to the configuration file, for the undo journal.
+/// A change to the configuration file: the line before and after.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigChange {
     pub before: String,
@@ -310,28 +309,6 @@ pub fn unset_config_variable(rules: &Rules, name: &str, confirm: &mut dyn FnMut(
     let before = lines.remove(i);
     write_lines(rules.file(), &lines)?;
     Ok(Unset::Removed(ConfigChange { before, after: String::new() }))
-}
-
-/// Undo a configuration change: restore `before` (or remove `after`).
-pub fn revert_config_change(rules: &Rules, change: &ConfigChange) -> Result<(), String> {
-    let mut lines = read_lines(rules.file());
-    let setting_name = |line: &str| line.split_once('=').map(|(k, _)| k.trim().to_string());
-    let target = if change.after.is_empty() { None } else { lines.iter().position(|l| *l == change.after) };
-    match (target, change.before.is_empty()) {
-        (Some(i), true) => {
-            lines.remove(i);
-        }
-        (Some(i), false) => lines[i] = change.before.clone(),
-        (None, false) => {
-            // The line was removed: put it back, replacing any later value.
-            match setting_name(&change.before).and_then(|n| find_setting(&lines, &n)) {
-                Some(i) => lines[i] = change.before.clone(),
-                None => lines.push(change.before.clone()),
-            }
-        }
-        (None, true) => return Ok(()),
-    }
-    write_lines(rules.file(), &lines)
 }
 
 #[cfg(test)]

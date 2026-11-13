@@ -3,9 +3,10 @@
 //!   - open the database from `$TIMEWARRIORDB`, else the standard location
 //!   - show a scrollable summary (same rows as `timew summary`)
 //!   - quick filters: Day, Yesterday, Month (default), Year, a date range, a tag
-//!   - edit the start and end of an entry (`e`); everything else is read-only.
-//!     Edits go through the `timew-rs` library, so overlaps are refused and
-//!     `timew-rs undo` reverts them.
+//!   - edit the start, end, tags and annotation of an entry (`e`); everything
+//!     else is read-only.
+//!     Edits go through the `timew-rs` library, so overlaps are refused;
+//!     `u` undoes the last edit.
 
 use std::env;
 use std::io;
@@ -140,20 +141,80 @@ struct EditForm {
     /// The entry as it is stored.
     original: Interval,
     id: u32,
-    /// Start date, start time, end date, end time.
-    fields: [String; 4],
-    /// The fields as first shown; unchanged ones keep their exact time
-    /// (including seconds).
-    initial: [String; 4],
+    /// Start date, start time, end date, end time, tags, annotation.
+    fields: [String; FIELDS],
+    /// The fields as first shown; unchanged ones keep their exact value
+    /// (times their seconds).
+    initial: [String; FIELDS],
     /// Index into `fields` of the field being typed in.
     field: usize,
     /// Cursor position (in characters) in that field.
     cursor: usize,
+    /// First visible character of the active text field (tags and
+    /// annotation scroll sideways).
+    scroll: usize,
     error: Option<String>,
 }
 
-/// Screen widths of the fields: a leading space, the text, room for the cursor.
+/// Index of the tags field; the fields from here on are free text.
+const TAGS: usize = 4;
+const ANNOTATION: usize = 5;
+const FIELDS: usize = 6;
+/// Screen widths of the date and time fields: a leading space, the text,
+/// room for the cursor. The tags field takes the rest of the line.
 const EDIT_FIELD_WIDTHS: [u16; 4] = [12, 10, 12, 10];
+const MAX_TEXT_LEN: usize = 500;
+
+/// Tags and annotation are text fields: typing inserts, they scroll.
+fn is_text(field: usize) -> bool {
+    field >= TAGS
+}
+
+/// Tags as one line of text: separated by spaces, a tag with a space or a
+/// quote in double quotes.
+fn tags_to_text(tags: &[String]) -> String {
+    tags.iter()
+        .map(|t| if t.contains([' ', '"']) { format!("\"{}\"", t.replace('"', "\\\"")) } else { t.clone() })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The reverse of `tags_to_text`: words, or "quoted words" (with `\"` for
+/// a quote inside).
+fn parse_tags(text: &str) -> Result<Vec<String>, String> {
+    let mut tags = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut tag = String::new();
+        if c == '"' {
+            chars.next();
+            loop {
+                match chars.next() {
+                    None => return Err("Tags: a quote is not closed.".into()),
+                    Some('\\') if chars.peek() == Some(&'"') => tag.push(chars.next().unwrap()),
+                    Some('"') => break,
+                    Some(ch) => tag.push(ch),
+                }
+            }
+        } else {
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() {
+                    break;
+                }
+                tag.push(ch);
+                chars.next();
+            }
+        }
+        if !tag.is_empty() {
+            tags.push(tag);
+        }
+    }
+    Ok(tags)
+}
 
 fn is_separator(c: char) -> bool {
     c == '-' || c == ':'
@@ -169,8 +230,10 @@ impl EditForm {
             time(iv.range.start),
             if iv.is_open() { String::new() } else { date(iv.range.end) },
             if iv.is_open() { String::new() } else { time(iv.range.end) },
+            tags_to_text(&iv.tags),
+            iv.annotation.clone().unwrap_or_default(),
         ];
-        EditForm { original: iv.clone(), id: t.id, initial: fields.clone(), fields, field: 0, cursor: 0, error: None }
+        EditForm { original: iv.clone(), id: t.id, initial: fields.clone(), fields, field: 0, cursor: 0, scroll: 0, error: None }
     }
 
     fn len(&self) -> usize {
@@ -179,16 +242,27 @@ impl EditForm {
 
     /// Go to field `i`, with the cursor at its start (or end).
     fn focus(&mut self, i: usize, at_end: bool) {
-        self.field = i % 4;
+        self.field = i % FIELDS;
         self.cursor = if at_end { self.len() } else { 0 };
     }
 
     /// Type `c` at the cursor. Over existing text it replaces the character
     /// under the cursor, stepping over the `-`/`:` separators, so a date or
     /// time can be retyped digit by digit; at the end it appends.
+    /// In the tags and annotation fields, it inserts like an ordinary text
+    /// field.
     fn type_char(&mut self, c: char) {
-        let max = EDIT_FIELD_WIDTHS[self.field] as usize - 2;
         let mut chars: Vec<char> = self.fields[self.field].chars().collect();
+        if is_text(self.field) {
+            if chars.len() < MAX_TEXT_LEN {
+                chars.insert(self.cursor.min(chars.len()), c);
+                self.cursor += 1;
+                self.fields[self.field] = chars.into_iter().collect();
+            }
+            self.error = None;
+            return;
+        }
+        let max = EDIT_FIELD_WIDTHS[self.field] as usize - 2;
         if !is_separator(c) && chars.get(self.cursor).copied().is_some_and(is_separator) {
             self.cursor += 1;
         }
@@ -216,7 +290,7 @@ impl EditForm {
         self.error = None;
     }
 
-    /// The entry with the start and end from the fields.
+    /// The entry with the start, end, tags and annotation from the fields.
     fn edited(&self) -> Result<Interval, String> {
         let f: Vec<&str> = self.fields.iter().map(|s| s.trim()).collect();
         let unchanged = |a: usize, b: usize| f[a] == self.initial[a].trim() && f[b] == self.initial[b].trim();
@@ -236,6 +310,16 @@ impl EditForm {
         }
         if edited.range.is_ended() && edited.range.end <= edited.range.start {
             return Err("The end must be after the start.".into());
+        }
+        if self.fields[TAGS] != self.initial[TAGS] {
+            edited.tags.clear();
+            for tag in parse_tags(&self.fields[TAGS])? {
+                edited.add_tag(tag);
+            }
+        }
+        if self.fields[ANNOTATION] != self.initial[ANNOTATION] {
+            let text = self.fields[ANNOTATION].trim();
+            edited.annotation = if text.is_empty() { None } else { Some(text.to_string()) };
         }
         Ok(edited)
     }
@@ -349,9 +433,14 @@ struct App {
     /// Open edit form (`e`) for the selected entry.
     edit: Option<EditForm>,
     /// Screen areas of the edit form's fields from the last draw.
-    edit_fields: [Rect; 4],
+    edit_fields: [Rect; FIELDS],
     /// A message for the status line, cleared by the next key.
     notice: Option<String>,
+    /// Whether the notice reports a failure (red instead of green).
+    notice_failed: bool,
+    /// The last saved edit, for `u`: the entry before the edit and every
+    /// change the save made (including adjusted entries). Only in memory.
+    last_edit: Option<(Interval, Vec<timew_rs::session::Change>)>,
     filter: Filter,
     range: Range,
     /// The range used by `Filter::Custom`, and the text it was entered as.
@@ -418,8 +507,10 @@ impl App {
             db_root,
             config_dir,
             edit: None,
-            edit_fields: [Rect::default(); 4],
+            edit_fields: [Rect::default(); FIELDS],
             notice: None,
+            notice_failed: false,
+            last_edit: None,
             filter: Filter::Month,
             range: Range::empty(),
             custom_range: Range::empty(),
@@ -543,9 +634,9 @@ impl App {
         match key.code {
             KeyCode::Esc => self.edit = None,
             KeyCode::Tab | KeyCode::Down => form.focus(form.field + 1, false),
-            KeyCode::BackTab | KeyCode::Up => form.focus(form.field + 3, false),
+            KeyCode::BackTab | KeyCode::Up => form.focus(form.field + FIELDS - 1, false),
             // the cursor moves into the neighboring field at either end
-            KeyCode::Left if form.cursor == 0 => form.focus(form.field + 3, true),
+            KeyCode::Left if form.cursor == 0 => form.focus(form.field + FIELDS - 1, true),
             KeyCode::Left => form.cursor -= 1,
             KeyCode::Right if form.cursor >= form.len() => form.focus(form.field + 1, false),
             KeyCode::Right => form.cursor += 1,
@@ -578,21 +669,20 @@ impl App {
         let mut paths = Paths::from_env();
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
-        let adjusted = match timew_rs::modify_interval(&paths, &form.original, &edited, adjust) {
-            Ok(n) => n,
+        let (adjusted, actions) = match timew_rs::modify_interval(&paths, &form.original, &edited, adjust) {
+            Ok(result) => result,
             Err(e) if e.starts_with("You cannot overlap") => {
                 return form.error = Some("Overlaps another entry. Shift+Enter adjusts it.".into());
             }
             Err(e) => return form.error = Some(e),
         };
-        let changed = form.original != edited;
+        let changed = !actions.is_empty();
+        if changed {
+            self.last_edit = Some((form.original.clone(), actions));
+        }
         self.edit = None;
         self.load();
-        // keep the edited entry selected, if it is still shown
-        let row = self.summary.rows.iter().position(|r| self.tracked[r.source].interval == edited);
-        if let Some(i) = row {
-            self.table.select(Some(i));
-        }
+        let row = self.select_interval(&edited);
         let others = match adjusted {
             0 => String::new(),
             1 => " 1 overlapping entry adjusted.".into(),
@@ -600,9 +690,40 @@ impl App {
         };
         self.notice = Some(match (changed, row) {
             (false, _) => "No changes.".into(),
-            (true, Some(_)) => format!("Saved.{others} 'timew-rs undo' reverts it."),
-            (true, None) => format!("Saved; the entry is now outside the shown period.{others}"),
+            (true, Some(_)) => format!("Saved.{others} u undoes it."),
+            (true, None) => format!("Saved; the entry is now outside the shown period.{others} u undoes it."),
         });
+        self.notice_failed = false;
+    }
+
+    /// Select the row of `interval`, if it is shown. Returns the row.
+    fn select_interval(&mut self, interval: &Interval) -> Option<usize> {
+        let row = self.summary.rows.iter().position(|r| self.tracked[r.source].interval == *interval);
+        if let Some(i) = row {
+            self.table.select(Some(i));
+        }
+        row
+    }
+
+    /// Revert the last saved edit (`u`). Only the last one can be undone.
+    fn undo_edit(&mut self) {
+        let Some((before, changes)) = self.last_edit.take() else { return };
+        let mut paths = Paths::from_env();
+        paths.db_dir = self.db_root.clone();
+        paths.config_dir = self.config_dir.clone();
+        match timew_rs::undo_change(&paths, &changes) {
+            Ok(()) => {
+                self.load();
+                self.select_interval(&before);
+                self.notice = Some("Undone.".to_string());
+                self.notice_failed = false;
+            }
+            Err(e) => {
+                self.notice = Some(format!("Not undone: {e}"));
+                self.notice_failed = true;
+                self.load();
+            }
+        }
     }
 
     fn open_range_input(&mut self) {
@@ -826,6 +947,7 @@ impl App {
             KeyCode::Char('b') if !self.wide => self.chart = !self.chart,
             KeyCode::Enter | KeyCode::Char('i') => self.toggle_details(),
             KeyCode::Char('e') => self.open_edit(),
+            KeyCode::Char('u') => self.undo_edit(),
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
@@ -881,8 +1003,9 @@ impl App {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind
                 && let Some(i) = self.edit_fields.iter().position(|r| r.contains(pos))
             {
+                let scroll = if i == form.field && is_text(i) { form.scroll } else { 0 };
                 form.field = i;
-                form.cursor = (pos.x.saturating_sub(self.edit_fields[i].x + 1) as usize).min(form.len());
+                form.cursor = (scroll + pos.x.saturating_sub(self.edit_fields[i].x + 1) as usize).min(form.len());
             }
             return;
         }
@@ -1114,7 +1237,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         draw_summary(frame, body, app);
     }
     draw_status(frame, status, app);
-    draw_help(frame, help, app.wide);
+    draw_help(frame, help, app.wide, app.last_edit.is_some());
     draw_picker(frame, body, app);
     draw_range_input(frame, body, app);
     draw_month_picker(frame, body, app);
@@ -1524,41 +1647,6 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &mut App) {
 
 /// The details panel as a form for the start and end of the entry.
 fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
-    let Some(form) = &app.edit else { return };
-    let iv = &form.original;
-    let label = |s: &'static str| Span::styled(format!("{s:<11}"), Style::new().fg(ACCENT).bold());
-    let field = |i: usize| {
-        let style = if form.field == i { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
-        Span::styled(format!(" {:<w$}", form.fields[i], w = EDIT_FIELD_WIDTHS[i] as usize - 1), style)
-    };
-    let tags = if iv.tags.is_empty() { "(none)".to_string() } else { iv.tags.join(", ") };
-    let now = jiff::Timestamp::now().as_second();
-    let duration = match form.edited() {
-        Ok(e) => Span::styled(format_hm(e.range.total(now)), Style::new().fg(Color::Yellow).bold()),
-        Err(_) => Span::styled("–", Style::new().dim()),
-    };
-    let last = match &form.error {
-        Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
-        None if iv.is_open() => Line::styled("YYYY-MM-DD  HH:MM · empty end: still tracking", Style::new().dim()),
-        None => Line::styled("YYYY-MM-DD  HH:MM", Style::new().dim()),
-    };
-    let lines = vec![
-        Line::from(vec![label("ID"), Span::raw(format!("@{}", form.id))]),
-        Line::from(vec![label("Tags"), Span::raw(tags)]),
-        Line::from(vec![
-            label("Annotation"),
-            match &iv.annotation {
-                Some(a) if !a.is_empty() => Span::raw(a.clone()),
-                _ => Span::styled("(none)", Style::new().dim()),
-            },
-        ]),
-        Line::raw(""),
-        Line::from(vec![label("Start"), field(0), Span::raw(" "), field(1)]),
-        Line::from(vec![label("End"), field(2), Span::raw(" "), field(3)]),
-        Line::from(vec![label("Duration"), duration]),
-        Line::raw(""),
-        last,
-    ];
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(FOCUS))
@@ -1567,13 +1655,72 @@ fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
         .padding(PAD);
     let inner = block.inner(area);
     let x = inner.x + 11;
-    let rect = |dx: u16, dy: u16, i: usize| Rect::new(x + dx, inner.y + dy, EDIT_FIELD_WIDTHS[i], 1).intersection(inner);
-    app.edit_fields = [rect(0, 4, 0), rect(EDIT_FIELD_WIDTHS[0] + 1, 4, 1), rect(0, 5, 2), rect(EDIT_FIELD_WIDTHS[2] + 1, 5, 3)];
-    let active = app.edit_fields[form.field];
-    let cursor = Position::new((active.x + 1 + form.cursor as u16).min(active.right().saturating_sub(1)), active.y);
+    // the tags field scrolls sideways to keep the cursor visible
+    let tags_w = inner.right().saturating_sub(x);
+    let Some(form) = &mut app.edit else { return };
+    let visible = (tags_w as usize).saturating_sub(2).max(1);
+    if is_text(form.field) {
+        if form.cursor < form.scroll {
+            form.scroll = form.cursor;
+        } else if form.cursor >= form.scroll + visible {
+            form.scroll = form.cursor + 1 - visible;
+        }
+    } else {
+        form.scroll = 0;
+    }
+    let form = &*form;
+    let iv = &form.original;
+    let label = |s: &'static str| Span::styled(format!("{s:<11}"), Style::new().fg(ACCENT).bold());
+    let field = |i: usize| {
+        let style = if form.field == i { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
+        if is_text(i) {
+            let skip = if i == form.field { form.scroll } else { 0 };
+            let text: String = form.fields[i].chars().skip(skip).take(visible).collect();
+            return Span::styled(format!(" {:<w$}", text, w = (tags_w as usize).saturating_sub(1)), style);
+        }
+        Span::styled(format!(" {:<w$}", form.fields[i], w = EDIT_FIELD_WIDTHS[i] as usize - 1), style)
+    };
+    let now = jiff::Timestamp::now().as_second();
+    let duration = match form.edited() {
+        Ok(e) => Span::styled(format_hm(e.range.total(now)), Style::new().fg(Color::Yellow).bold()),
+        Err(_) => Span::styled("–", Style::new().dim()),
+    };
+    let last = match &form.error {
+        Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
+        None if form.field == TAGS => Line::styled("separated by spaces, \"in quotes\" with spaces", Style::new().dim()),
+        None if form.field == ANNOTATION => Line::styled("any text; empty removes the annotation", Style::new().dim()),
+        None if iv.is_open() => Line::styled("YYYY-MM-DD  HH:MM · empty end: still tracking", Style::new().dim()),
+        None => Line::styled("YYYY-MM-DD  HH:MM", Style::new().dim()),
+    };
+    let lines = vec![
+        Line::from(vec![label("ID"), Span::raw(format!("@{}", form.id))]),
+        Line::from(vec![label("Tags"), field(TAGS)]),
+        Line::from(vec![label("Annotation"), field(ANNOTATION)]),
+        Line::raw(""),
+        Line::from(vec![label("Start"), field(0), Span::raw(" "), field(1)]),
+        Line::from(vec![label("End"), field(2), Span::raw(" "), field(3)]),
+        Line::from(vec![label("Duration"), duration]),
+        Line::raw(""),
+        last,
+    ];
+    let rect = |dx: u16, dy: u16, w: u16| Rect::new(x + dx, inner.y + dy, w, 1).intersection(inner);
+    let w = EDIT_FIELD_WIDTHS;
+    let fields = [
+        rect(0, 4, w[0]),
+        rect(w[0] + 1, 4, w[1]),
+        rect(0, 5, w[2]),
+        rect(w[2] + 1, 5, w[3]),
+        rect(0, 1, tags_w),
+        rect(0, 2, tags_w),
+    ];
+    let active = fields[form.field];
+    let column = form.cursor - if is_text(form.field) { form.scroll } else { 0 };
+    let cursor = Position::new((active.x + 1 + column as u16).min(active.right().saturating_sub(1)), active.y);
+    let has_cursor = active.width > 0 && active.height > 0;
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
-    if active.width > 0 && active.height > 0 {
+    app.edit_fields = fields;
+    if has_cursor {
         frame.set_cursor_position(cursor);
     }
 }
@@ -1819,7 +1966,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let total = app.summary.grand_total;
     let avg = if days > 0 { format!("{} h", decimal_hours(total / days as i64)) } else { "-".into() };
     if let Some(notice) = &app.notice {
-        frame.render_widget(Paragraph::new(Line::styled(format!(" {notice}"), Style::new().fg(Color::Green).bold())), area);
+        let color = if app.notice_failed { Color::Red } else { Color::Green };
+        frame.render_widget(Paragraph::new(Line::styled(format!(" {notice}"), Style::new().fg(color).bold())), area);
         return;
     }
     let pos = match app.table.selected() {
@@ -1841,14 +1989,19 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_help(frame: &mut Frame, area: Rect, wide: bool) {
-    let mut items: Vec<(&str, &str)> = vec![
+fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool) {
+    let mut items: Vec<(&str, &str)> = Vec::new();
+    if can_undo {
+        // first, so that it is visible in a narrow window too
+        items.push(("u", "undo"));
+    }
+    items.extend([
         ("↑↓", "move"),
         ("1-4", "range"),
         ("⇧3/⇧4", "pick"),
         ("5", "range"),
         ("6", "tag"),
-    ];
+    ]);
     if !wide {
         items.extend([("b", "chart"), ("Enter", "details")]);
     }
@@ -1909,14 +2062,17 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("b", "hours-per-tag chart (narrow window)"),
         k("Esc", "close the chart / details (narrow window)"),
         h("Editing"),
-        k("e", "edit start and end of the selected entry"),
+        k("e", "edit start, end, tags and annotation of the entry"),
         k("Tab ↑ ↓", "next / previous field"),
         k("0-9", "overwrite at the cursor (skips - and :)"),
+        k("text", "tags: separated by spaces, \"two words\" in quotes"),
+        k("text", "annotation: any text, empty removes it"),
         k("← → Home End", "move the cursor"),
         k("⌫ Del  Ctrl+U", "delete / clear the field"),
         k("Enter", "save (overlaps are refused)"),
         k("⇧Enter  Alt+Enter", "save, adjusting overlapping entries"),
         k("Esc", "cancel"),
+        k("u", "undo the last saved edit"),
         h("In lists and the date form"),
         k("↑ ↓  j k", "move"),
         k("← →", "change the year (month list)"),
@@ -2854,12 +3010,12 @@ mod tests {
 
         press(&mut app, '?');
         assert_eq!(app.legend, Some(0));
-        let screen = render_at(&mut app, 100, 50);
+        let screen = render_at(&mut app, 100, 60);
         println!("{screen}");
         assert!(screen.contains(" Keys ") && screen.contains("Periods") && screen.contains("hours-per-tag chart"));
         // every line fits at this height: no scrolling
         press(&mut app, 'j');
-        render_at(&mut app, 100, 50);
+        render_at(&mut app, 100, 60);
         assert_eq!(app.legend, Some(0));
 
         // the legend takes all keys: these don't change the filter or quit
@@ -2968,8 +3124,7 @@ mod tests {
         assert_eq!(iv.tags, vec!["meetings".to_string()], "the edited entry stays selected");
         let data = today_file(&root);
         assert!(data.contains(&format!("inc {} - {} # meetings", today_at(7, 30), today_at(9, 45))), "{data}");
-        let undo = fs::read_to_string(root.join("data/undo.data")).unwrap();
-        assert!(undo.starts_with("txn:\n  type: interval\n"), "{undo}");
+        assert!(!root.join("data/undo.data").exists(), "no undo journal is written");
         // the notice goes away with the next key
         press(&mut app, 'j');
         assert!(!render_at(&mut app, 140, 24).contains("Saved."));
@@ -2992,7 +3147,9 @@ mod tests {
         let header = screen.lines().find(|l| l.contains("Summary · Day")).unwrap();
         assert!(!header.contains("Edit entry"));
 
-        key(&mut app, KeyCode::Up); // end time
+        key(&mut app, KeyCode::BackTab); // annotation
+        key(&mut app, KeyCode::BackTab); // tags
+        key(&mut app, KeyCode::BackTab); // end time
         ctrl_u(&mut app);
         type_text(&mut app, "25:00");
         key(&mut app, KeyCode::Enter);
@@ -3066,7 +3223,9 @@ mod tests {
             render_at(&mut app, 140, 24);
             // meetings 08-10 now ends 10:30, into email 10-11
             press(&mut app, 'e');
-            key(&mut app, KeyCode::Up);
+            key(&mut app, KeyCode::Up); // annotation
+            key(&mut app, KeyCode::Up); // tags
+            key(&mut app, KeyCode::Up); // end time
             type_text(&mut app, "1030");
             key(&mut app, KeyCode::Enter);
             assert!(app.edit.as_ref().unwrap().error.is_some(), "plain Enter refuses the overlap");
@@ -3106,6 +3265,192 @@ mod tests {
         key(&mut app, KeyCode::Esc);
         press(&mut app, '?');
         assert_ne!(corner(&mut app), FOCUS, "the legend has it");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn tags_as_text() {
+        let tags = vec!["client a".to_string(), "meetings".to_string(), "say \"hi\"".to_string()];
+        let text = tags_to_text(&tags);
+        assert_eq!(text, "\"client a\" meetings \"say \\\"hi\\\"\"");
+        assert_eq!(parse_tags(&text).unwrap(), tags);
+        assert_eq!(parse_tags("  a   b-c  ").unwrap(), vec!["a", "b-c"]);
+        assert_eq!(parse_tags("").unwrap(), Vec::<String>::new());
+        assert!(parse_tags("a \"b c").is_err());
+    }
+
+    #[test]
+    fn edit_changes_tags() {
+        let root = sample_db("edit-tags");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        render_at(&mut app, 140, 24);
+        press(&mut app, 'e');
+        key(&mut app, KeyCode::Up); // from the start date up to the annotation
+        key(&mut app, KeyCode::Up); // and the tags
+        assert_eq!(app.edit.as_ref().unwrap().field, TAGS);
+        let screen = render_at(&mut app, 140, 24);
+        assert!(screen.contains("separated by spaces"), "{screen}");
+        key(&mut app, KeyCode::End);
+        type_text(&mut app, " \"client a");
+        key(&mut app, KeyCode::Enter);
+        assert!(render_at(&mut app, 140, 24).contains("Tags: a quote is not closed."));
+        type_text(&mut app, "\" planning");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.edit.is_none());
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["client a", "meetings", "planning"]);
+        let data = today_file(&root);
+        assert!(data.contains(&format!("inc {} - {} # \"client a\" meetings planning", today_at(8, 0), today_at(10, 0))), "{data}");
+        let tags_db = fs::read_to_string(root.join("data/tags.data")).unwrap();
+        assert!(tags_db.contains("\"client a\":{\"count\":1}") && tags_db.contains("\"planning\":{\"count\":2}"), "{tags_db}");
+
+        // remove all tags
+        press(&mut app, 'e');
+        key(&mut app, KeyCode::BackTab);
+        key(&mut app, KeyCode::BackTab);
+        ctrl_u(&mut app);
+        key(&mut app, KeyCode::Enter);
+        assert!(app.selected().unwrap().interval.tags.is_empty());
+        assert!(today_file(&root).contains(&format!("inc {} - {}\n", today_at(8, 0), today_at(10, 0))));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+
+    #[test]
+    fn edit_changes_the_annotation() {
+        let root = sample_db("edit-annotation");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        render_at(&mut app, 140, 24);
+        press(&mut app, 'e');
+        key(&mut app, KeyCode::Up); // the annotation is just above the start
+        assert_eq!(app.edit.as_ref().unwrap().field, ANNOTATION);
+        assert!(render_at(&mut app, 140, 24).contains("any text; empty removes the annotation"));
+        type_text(&mut app, "weekly sync, \"room 2\"");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.edit.is_none());
+        let iv = &app.selected().unwrap().interval;
+        assert_eq!(iv.annotation.as_deref(), Some("weekly sync, \"room 2\""));
+        let data = today_file(&root);
+        assert!(data.contains(&format!("inc {} - {} # meetings # \"weekly sync, \\\"room 2\\\"\"", today_at(8, 0), today_at(10, 0))), "{data}");
+        // the details panel shows it
+        assert!(render_at(&mut app, 140, 24).contains("weekly sync"));
+
+        // the form shows the current annotation; clearing removes it
+        press(&mut app, 'e');
+        assert_eq!(app.edit.as_ref().unwrap().fields[ANNOTATION], "weekly sync, \"room 2\"");
+        key(&mut app, KeyCode::Up);
+        ctrl_u(&mut app);
+        type_text(&mut app, "   ");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.selected().unwrap().interval.annotation, None);
+        assert!(today_file(&root).contains(&format!("inc {} - {} # meetings\n", today_at(8, 0), today_at(10, 0))));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    fn footer(app: &mut App) -> String {
+        render_at(app, 140, 24).lines().last().unwrap().to_string()
+    }
+
+    /// Edit the selected entry's end time to `end` and save (with or
+    /// without adjusting overlaps).
+    fn edit_end(app: &mut App, end: &str, adjust: bool) {
+        press(app, 'e');
+        for _ in 0..3 {
+            key(app, KeyCode::BackTab); // annotation, tags, end time
+        }
+        type_text(app, end);
+        key_with(app, KeyCode::Enter, if adjust { KeyModifiers::ALT } else { KeyModifiers::NONE });
+        assert!(app.edit.is_none(), "{:?}", app.edit.as_ref().and_then(|f| f.error.clone()));
+    }
+
+    #[test]
+    fn u_undoes_the_last_saved_edit() {
+        let root = sample_db("edit-undo");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        let original = today_file(&root);
+        assert!(!footer(&mut app).contains("u undo"), "nothing to undo yet");
+        press(&mut app, 'u'); // does nothing
+        assert_eq!(today_file(&root), original);
+
+        // two edits: meetings ends 09:30, then it ends 10:30 adjusting email
+        edit_end(&mut app, "0930", false);
+        let first = today_file(&root);
+        assert!(footer(&mut app).starts_with(" u undo  "), "{}", footer(&mut app));
+        edit_end(&mut app, "1030", true);
+        assert!(today_file(&root).contains(&format!("inc {} - {} # email", today_at(10, 30), today_at(11, 0))));
+
+        // u reverts the last edit only, the adjusted email entry included
+        press(&mut app, 'u');
+        assert!(render_at(&mut app, 140, 24).contains("Undone."));
+        assert_eq!(today_file(&root), first);
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["meetings".to_string()]);
+        assert!(!footer(&mut app).contains("u undo"), "only one level of undo");
+        press(&mut app, 'u');
+        assert_eq!(today_file(&root), first);
+        assert!(!root.join("data/undo.data").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn u_refuses_when_the_entry_changed_since() {
+        let root = sample_db("edit-undo-stale");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        edit_end(&mut app, "0930", false);
+
+        // another program changes the edited entry afterwards
+        let mut paths = Paths::from_env();
+        paths.db_dir = root.clone();
+        paths.config_dir = root.clone();
+        let mut db = Database::open(root.join("data")).unwrap();
+        let meetings = db.all_tracked().unwrap().remove(1).interval;
+        assert_eq!(meetings.tags, vec!["meetings".to_string()]);
+        let mut changed = meetings.clone();
+        changed.add_tag("x");
+        timew_rs::modify_interval(&paths, &meetings, &changed, false).unwrap();
+        let after_other = today_file(&root);
+
+        press(&mut app, 'u');
+        let screen = render_at(&mut app, 140, 24);
+        assert!(screen.contains("Not undone: The entry was changed by another program since."), "{screen}");
+        assert_eq!(today_file(&root), after_other, "nothing was reverted");
+        assert!(!footer(&mut app).contains("u undo"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn u_refuses_to_restore_into_a_new_entry() {
+        let root = sample_db("edit-undo-overlap");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        edit_end(&mut app, "0930", false); // meetings 08:00-09:30, free until 10:00
+
+        // another program records 09:40-09:50
+        let mut paths = Paths::from_env();
+        paths.db_dir = root.clone();
+        paths.config_dir = root.clone();
+        let mut db = Database::open(root.join("data")).unwrap();
+        let mut new = db.all_tracked().unwrap().remove(1).interval;
+        let start = new.range.end + 600;
+        new.range = Range::new(start, start + 600);
+        new.tags = vec!["new".into()];
+        db.add_interval(&new).unwrap();
+        db.commit().unwrap();
+        let before = today_file(&root);
+
+        press(&mut app, 'u');
+        assert!(render_at(&mut app, 140, 24).contains("Not undone: It would overlap an entry added since."));
+        assert_eq!(today_file(&root), before);
         let _ = fs::remove_dir_all(&root);
     }
 

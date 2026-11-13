@@ -5,7 +5,6 @@ use crate::session::Session;
 
 pub fn run(s: &mut Session) -> Result<i32, String> {
     let annotation = s.cli.text();
-    s.journal.start();
     s.flatten_latest()?;
     for t in super::ids_or_active(s, "annotate")? {
         let mut modified = t.interval.clone();
@@ -19,6 +18,5 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
             }
         }
     }
-    s.journal.end()?;
     Ok(0)
 }

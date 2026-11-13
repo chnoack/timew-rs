@@ -28,14 +28,12 @@ pub fn start_interval(s: &mut Session, range: Range) -> Result<i32, String> {
     for tag in s.cli.tags() {
         interval.add_tag(tag);
     }
-    s.journal.start();
     if s.cli.has_hint("fill") {
         fill_start(s, &mut interval, 0)?;
     }
     if auto_adjust(s, s.cli.has_hint("adjust"), &interval)? {
         s.add(&interval)?;
     }
-    s.journal.end()?;
     if s.verbose() {
         let text = super::summarize(&s.rules, &interval, s.now);
         s.out.push_str(&text);

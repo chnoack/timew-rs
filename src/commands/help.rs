@@ -36,7 +36,6 @@ const USAGE: &[&str] = &[
     "timew tag @<id> [@<id> ...] <tag> [<tag> ...]",
     "timew tags [<interval>] [<tag> ...]",
     "timew track <interval> [<tag> ...]",
-    "timew undo",
     "timew untag @<id> [@<id> ...] <tag> [<tag> ...]",
     "timew week [<interval>] [<tag> ...]",
 ];

@@ -21,10 +21,8 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     };
     let mut modified = found.interval.clone();
     fill(s, &mut modified, found.id)?;
-    s.journal.start();
     s.delete(&found.interval)?;
     auto_adjust(s, s.cli.has_hint("adjust"), &modified)?;
     s.add(&modified)?;
-    s.journal.end()?;
     Ok(0)
 }

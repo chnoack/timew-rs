@@ -22,7 +22,6 @@ pub fn run(s: &mut Session, change: Change) -> Result<i32, String> {
         return Err(format!("At least one tag must be specified. See 'timew help {name}'."));
     }
     let tag_list = join_quoted(" ", &tags);
-    s.journal.start();
     s.flatten_latest()?;
     for t in super::ids_or_active(s, name)? {
         let mut modified = t.interval.clone();
@@ -44,6 +43,5 @@ pub fn run(s: &mut Session, change: Change) -> Result<i32, String> {
             s.out.push_str(&line);
         }
     }
-    s.journal.end()?;
     Ok(0)
 }

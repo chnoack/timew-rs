@@ -22,7 +22,6 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     let range = s.cli.range(Range::empty(), s.now)?;
     let do_fill = s.cli.has_hint("fill");
 
-    s.journal.start();
     s.flatten_latest()?;
     let interval = s.tracked_ids(&ids)?.remove(0).interval;
     if !range.is_started() && !do_fill {
@@ -61,6 +60,5 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     s.delete(&interval)?;
     auto_adjust(s, s.cli.has_hint("adjust"), &modified)?;
     s.add(&modified)?;
-    s.journal.end()?;
     Ok(0)
 }

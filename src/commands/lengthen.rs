@@ -28,7 +28,6 @@ pub fn run(s: &mut Session, change: Change) -> Result<i32, String> {
     };
     let adjust = s.cli.has_hint("adjust");
 
-    s.journal.start();
     s.flatten_latest()?;
     for t in s.tracked_ids(&ids)? {
         if t.interval.is_open() {
@@ -66,6 +65,5 @@ pub fn run(s: &mut Session, change: Change) -> Result<i32, String> {
             s.out.push_str(&line);
         }
     }
-    s.journal.end()?;
     Ok(0)
 }

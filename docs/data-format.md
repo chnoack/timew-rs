@@ -16,7 +16,7 @@ $TIMEWARRIORDB/
     ├── 2025-02.data
     ├── …
     ├── tags.data          tag -> number of intervals using it
-    └── undo.data          the undo journal
+    └── undo.data          Timewarrior's undo journal (not used by timew-rs)
 ```
 
 Without `$TIMEWARRIORDB`, the configuration and the data can be in
@@ -104,30 +104,10 @@ Entries are sorted by tag:
 
 ## `undo.data`
 
-One transaction per command that changed something, each with the
-actions it took:
-
-```
-txn:
-  type: interval
-  before: {"id":0,"start":"20250303T110000Z","tags":["x","y"]}
-  after: 
-  type: interval
-  before: 
-  after: {"id":0,"start":"20250303T110000Z","end":"20250303T113000Z","tags":["x","y"]}
-txn:
-  type: config
-  before: 
-  after: name = value
-```
-
-- An `interval` action holds the interval's JSON (as in `export`) before
-  and after; an empty side means the interval was added or deleted. A
-  change is a delete followed by an add.
-- A `config` action holds the configuration file line before and after.
-- `journal.size` sets how many transactions are kept: `-1` (default) keeps
-  all, `0` turns the journal off and removes the file.
-- `undo` removes the last transaction and reverts its actions, last first.
+Timewarrior keeps an undo journal in `data/undo.data`. `timew-rs` and
+`timew-tui` neither write nor read it, and leave an existing file alone.
+(So after changes made with `timew-rs`, `timew undo` would revert an older
+Timewarrior change instead.)
 
 ## `timewarrior.cfg`
 

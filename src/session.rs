@@ -1,9 +1,9 @@
 //! One run of the program: the parsed command line, the configuration,
-//! the database and the undo journal, plus the output collected so far.
+//! the database, plus the output collected so far.
 //!
 //! All changes to intervals go through [`Session::add`],
-//! [`Session::delete`] and [`Session::modify`], which keep the undo
-//! journal and print the "new tag" notes.
+//! [`Session::delete`] and [`Session::modify`], which record them in
+//! [`Session::changes`] and print the "new tag" notes.
 //!
 //! # Exclusions and synthetic intervals
 //!
@@ -22,17 +22,26 @@ use crate::database::{Database, Tracked};
 use crate::exclusion;
 use crate::extensions::Extensions;
 use crate::interval::Interval;
-use crate::journal::Journal;
 use crate::paths::Paths;
 use crate::range::{subtract_all, Epoch, Range};
 use crate::rules::Rules;
 use crate::text::quote_if_needed;
 
+/// One change to the stored intervals: `before` was replaced by `after`.
+/// An empty `before` means the interval was added, an empty `after` that it
+/// was deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub before: Interval,
+    pub after: Interval,
+}
+
 pub struct Session {
     pub cli: Cli,
     pub rules: Rules,
     pub db: Database,
-    pub journal: Journal,
+    /// Every change made to the stored intervals in this run, in order.
+    pub changes: Vec<Change>,
     pub extensions: Extensions,
     pub paths: Paths,
     /// Standard output, written when the command is done.
@@ -64,13 +73,13 @@ impl Session {
                 self.out.push_str(&format!("Note: '{}' is a new tag.\n", quote_if_needed(&tag)));
             }
         }
-        self.journal.record_interval(String::new(), interval.to_json(0));
+        self.changes.push(Change { before: Interval::default(), after: interval.clone() });
         Ok(())
     }
 
     pub fn delete(&mut self, interval: &Interval) -> Result<(), String> {
         self.db.delete_interval(interval)?;
-        self.journal.record_interval(interval.to_json(0), String::new());
+        self.changes.push(Change { before: interval.clone(), after: Interval::default() });
         Ok(())
     }
 

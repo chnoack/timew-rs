@@ -13,7 +13,6 @@ pub mod duration;
 pub mod exclusion;
 pub mod extensions;
 pub mod interval;
-pub mod journal;
 pub mod paths;
 pub mod range;
 pub mod rules;
@@ -85,7 +84,6 @@ fn run_inner(args: &[String], stdout: &mut String) -> Result<(i32, String), Stri
         rules.set(&name, &value);
     }
 
-    let journal = journal::Journal::new(paths.data_dir().join("undo.data"), rules.get_int("journal.size", -1)?);
     let (db, notice, warning) = database::Database::open_and_repair(paths.data_dir())?;
     let mut stderr = String::new();
     if let Some(w) = warning {
@@ -96,7 +94,8 @@ fn run_inner(args: &[String], stdout: &mut String) -> Result<(i32, String), Stri
     let extensions = extensions::Extensions::load(&paths.extensions_dir())?;
     let cli = Cli::parse(args, &extensions.names())?;
 
-    let mut session = Session { cli, rules, db, journal, extensions, paths, out: std::mem::take(stdout), now };
+    let mut session =
+        Session { cli, rules, db, changes: Vec::new(), extensions, paths, out: std::mem::take(stdout), now };
     let result = commands::dispatch(&mut session);
     *stdout = std::mem::take(&mut session.out);
     let status = result?;
@@ -107,17 +106,19 @@ fn run_inner(args: &[String], stdout: &mut String) -> Result<(i32, String), Stri
 /// Replace the stored interval `from` with `to`, the way `timew modify`
 /// does: an overlap with another interval is refused, or with `adjust`
 /// resolved like `:adjust` (the other intervals are shortened, split or
-/// deleted). The change is recorded in the undo journal (so `timew undo`
-/// reverts it) and the tag counts are kept up to date. Returns how many
-/// other intervals were adjusted. Used by `timew-tui` to edit entries.
+/// deleted). The tag counts are kept up to date.
+///
+/// Returns how many other intervals were adjusted, and every change made
+/// (including those to adjusted intervals), which [`undo_change`] can
+/// revert. Used by `timew-tui` to edit entries.
 pub fn modify_interval(
     paths: &paths::Paths,
     from: &interval::Interval,
     to: &interval::Interval,
     adjust: bool,
-) -> Result<usize, String> {
+) -> Result<(usize, Vec<session::Change>), String> {
     if from == to {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
     let now = datetime::now();
     if to.range.is_ended() && to.range.start >= to.range.end {
@@ -126,31 +127,49 @@ pub fn modify_interval(
     if to.range.is_open() && to.range.start > now {
         return Err("A running entry cannot start in the future.".to_string());
     }
-
-    let config = paths.config_file();
-    let mut rules = if config.exists() { rules::Rules::load(&config)? } else { rules::Rules::default() };
-    rules.set("verbose", "off");
-    let journal = journal::Journal::new(paths.data_dir().join("undo.data"), rules.get_int("journal.size", -1)?);
-    let (db, _, _) = database::Database::open_and_repair(paths.data_dir())?;
-    let mut s = Session {
-        cli: Cli::default(),
-        rules,
-        db,
-        journal,
-        extensions: extensions::Extensions::default(),
-        paths: paths.clone(),
-        out: String::new(),
-        now,
-    };
+    let mut s = open_session(paths, now)?;
     if !s.db.intervals()?.contains(from) {
         return Err("The entry was changed by another program. Press r to reload.".to_string());
     }
-    s.journal.start();
     s.delete(from)?;
     let overlapping = s.tracked_in(&to.range, &[])?.len();
     validate::auto_adjust(&mut s, adjust, to)?;
     s.add(to)?;
-    s.journal.end()?;
     s.db.commit()?;
-    Ok(overlapping)
+    Ok((overlapping, s.changes))
+}
+
+/// Revert the changes made by [`modify_interval`]. Only if the intervals
+/// they left behind are still stored unchanged, and the restored intervals
+/// don't overlap anything added since; otherwise nothing is changed.
+pub fn undo_change(paths: &paths::Paths, changes: &[session::Change]) -> Result<(), String> {
+    let mut s = open_session(paths, datetime::now())?;
+    for change in changes.iter().rev() {
+        s.db.modify_interval(&change.after, &change.before)
+            .map_err(|_| "The entry was changed by another program since.".to_string())?;
+    }
+    let stored = s.db.intervals()?;
+    for restored in changes.iter().map(|c| &c.before).filter(|b| !b.is_empty() && stored.contains(b)) {
+        if stored.iter().any(|other| other != restored && other.range.intersects(&restored.range)) {
+            return Err("It would overlap an entry added since.".to_string());
+        }
+    }
+    s.db.commit()
+}
+
+fn open_session(paths: &paths::Paths, now: range::Epoch) -> Result<Session, String> {
+    let config = paths.config_file();
+    let mut rules = if config.exists() { rules::Rules::load(&config)? } else { rules::Rules::default() };
+    rules.set("verbose", "off");
+    let (db, _, _) = database::Database::open_and_repair(paths.data_dir())?;
+    Ok(Session {
+        cli: Cli::default(),
+        rules,
+        db,
+        changes: Vec::new(),
+        extensions: extensions::Extensions::default(),
+        paths: paths.clone(),
+        out: String::new(),
+        now,
+    })
 }

@@ -18,13 +18,12 @@ fn parse(content: &str) -> Result<Vec<Interval>, String> {
 
 fn import(s: &mut Session, intervals: &[Interval]) -> Result<(), String> {
     let adjust = s.cli.has_hint("adjust");
-    s.journal.start();
     for interval in intervals {
         if auto_adjust(s, adjust, interval)? {
             s.add(interval)?;
         }
     }
-    s.journal.end()
+    Ok(())
 }
 
 pub fn run(s: &mut Session) -> Result<i32, String> {
