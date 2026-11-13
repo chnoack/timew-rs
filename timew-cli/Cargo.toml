@@ -1,12 +1,8 @@
 [package]
-name = "timew-rs"
+name = "timew-cli"
 version = "0.2.0"
 edition = "2024"
-description = "A Rust implementation of Timewarrior: the timew_rs library and the timew-cli command"
-
-[[bin]]
-name = "timew-cli"
-path = "src/main.rs"
+description = "A Rust implementation of Timewarrior: the timew-cli command and its library"
 
 [dependencies]
 jiff = "0.2.42"

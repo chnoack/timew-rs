@@ -322,14 +322,14 @@ form, key legend, tag list, month list, year list, range form. Only if none
 is open does it reach the main view. `Ctrl+C` is handled before all of
 them.
 
-Saving an edit calls `timew_rs::modify_interval(paths, original, edited, adjust)`.
+Saving an edit calls `timew_cli::modify_interval(paths, original, edited, adjust)`.
 It opens the configuration and the database like `timew-cli` does, checks
 that the entry is still stored unchanged (otherwise it asks for a reload
 with `r`), deletes it, checks the edited one for overlaps with
 `validate::auto_adjust`, adds it and commits. If anything fails, nothing
 is written. It returns every change it made (`session::Change`: an
 interval before and after), which the TUI keeps in `App::last_edit`; `u`
-passes them to `timew_rs::undo_change`, which reverts them, last first,
+passes them to `timew_cli::undo_change`, which reverts them, last first,
 only if the intervals they left behind are still stored unchanged and the
 restored ones overlap nothing.
 

@@ -7,10 +7,10 @@ The repository is a Cargo workspace with two crates, one per folder:
 ```
 timew-rs/                    the repository
 ├── Cargo.toml               [workspace] members = ["timew-cli", "timew-tui"]
-├── timew-cli/               crate "timew-rs": the timew_rs library and the timew-cli command
+├── timew-cli/               crate "timew-cli": the timew_cli library and the timew-cli command
 │   ├── Cargo.toml
 │   ├── src/
-│   │   ├── main.rs          the timew-cli binary: calls timew_rs::run, prints
+│   │   ├── main.rs          the timew-cli binary: calls timew_cli::run, prints
 │   │   ├── lib.rs           startup: hints, paths, configuration, database
 │   │   ├── cli.rs           classifies arguments; the range grammar
 │   │   ├── session.rs       one run: database + config + output; records changes
@@ -33,12 +33,12 @@ timew-rs/                    the repository
 │   │   └── text.rs          widths, wrapping, quoting, JSON strings
 │   └── tests/cli.rs         end-to-end tests of the binary
 └── timew-tui/               crate "timew-tui"
-    ├── Cargo.toml           depends on timew-rs (path = "../timew-cli"), ratatui, jiff
+    ├── Cargo.toml           depends on timew-cli (path = "../timew-cli"), ratatui, jiff
     └── src/main.rs          the whole TUI (state, input, drawing, tests)
 ```
 
-The `timew-rs` crate (folder `timew-cli`) builds the **`timew_rs`
-library** and the **`timew-cli` binary**. Both crates have version 0.2.0. The workspace shares
+The `timew-cli` crate builds the **`timew_cli` library** and the
+**`timew-cli` binary**. Both crates have version 0.2.0. The workspace shares
 one `Cargo.lock` and one `target/` directory at the top.
 `timew-tui` uses only the library. Keeping the TUI in
 its own crate means `ratatui` is never compiled into `timew-cli`.
@@ -55,7 +55,7 @@ Dependencies are deliberately few:
 ## One run of `timew-cli`
 
 ```
-main.rs ── timew_rs::run(args)
+main.rs ── timew_cli::run(args)
              │
              ├─ cli::Cli::parse            hints such as :yes, :quiet, :color
              ├─ paths::Paths::initialize   create directories / config file if missing
@@ -163,6 +163,6 @@ cd /tmp/tw/test && for t in *.t; do python3 $t; done 2>&1 | grep -E '^(ok|not ok
   `validate::auto_adjust` before adding an interval that might overlap.
 - **The TUI** reads through `Database::open`, `all_tracked`,
   `tracked_in_range` and `summary::build`. Its only write is
-  `timew_rs::modify_interval` (editing an entry), which goes through
+  `timew_cli::modify_interval` (editing an entry), which goes through
   `Session`, so it is checked for overlaps like a command; its
   `undo_change` reverts the last edit.

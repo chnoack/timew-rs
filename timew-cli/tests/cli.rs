@@ -17,7 +17,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 impl Db {
     fn new() -> Db {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("timew-rs-cli-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("timew-cli-cli-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         Db { dir }

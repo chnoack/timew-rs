@@ -5,7 +5,7 @@
 //!   - quick filters: Day, Yesterday, Month (default), Year, a date range, a tag
 //!   - edit the start, end, tags and annotation of an entry (`e`); everything
 //!     else is read-only.
-//!     Edits go through the `timew-rs` library, so overlaps are refused;
+//!     Edits go through the `timew-cli` library, so overlaps are refused;
 //!     `u` undoes the last edit.
 
 use std::env;
@@ -27,12 +27,12 @@ use ratatui::widgets::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
-use timew_rs::commands::summary::{self, Summary};
-use timew_rs::database::{Database, Tracked};
-use timew_rs::datetime::{expand_range_hint, make_local, parse_datetime};
-use timew_rs::interval::Interval;
-use timew_rs::paths::Paths;
-use timew_rs::range::Range;
+use timew_cli::commands::summary::{self, Summary};
+use timew_cli::database::{Database, Tracked};
+use timew_cli::datetime::{expand_range_hint, make_local, parse_datetime};
+use timew_cli::interval::Interval;
+use timew_cli::paths::Paths;
+use timew_cli::range::Range;
 
 // ---------------------------------------------------------------------------
 // Database location
@@ -440,7 +440,7 @@ struct App {
     notice_failed: bool,
     /// The last saved edit, for `u`: the entry before the edit and every
     /// change the save made (including adjusted entries). Only in memory.
-    last_edit: Option<(Interval, Vec<timew_rs::session::Change>)>,
+    last_edit: Option<(Interval, Vec<timew_cli::session::Change>)>,
     filter: Filter,
     range: Range,
     /// The range used by `Filter::Custom`, and the text it was entered as.
@@ -669,7 +669,7 @@ impl App {
         let mut paths = Paths::from_env();
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
-        let (adjusted, actions) = match timew_rs::modify_interval(&paths, &form.original, &edited, adjust) {
+        let (adjusted, actions) = match timew_cli::modify_interval(&paths, &form.original, &edited, adjust) {
             Ok(result) => result,
             Err(e) if e.starts_with("You cannot overlap") => {
                 return form.error = Some("Overlaps another entry. Shift+Enter adjusts it.".into());
@@ -711,7 +711,7 @@ impl App {
         let mut paths = Paths::from_env();
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
-        match timew_rs::undo_change(&paths, &changes) {
+        match timew_cli::undo_change(&paths, &changes) {
             Ok(()) => {
                 self.load();
                 self.select_interval(&before);
@@ -2228,7 +2228,7 @@ mod tests {
         let today = jiff::Zoned::now().date();
         let at = |d: jiff::civil::Date, h: i8| {
             let ts = d.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp();
-            timew_rs::interval::format_iso(ts.as_second())
+            timew_cli::interval::format_iso(ts.as_second())
         };
         let yesterday = today.yesterday().unwrap();
         let mut lines = vec![
@@ -2924,7 +2924,7 @@ mod tests {
         fs::create_dir_all(root.join("data")).unwrap();
         let tz = jiff::tz::TimeZone::system();
         let today = jiff::Zoned::now().date();
-        let at = |h: i8| timew_rs::interval::format_iso(today.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
+        let at = |h: i8| timew_cli::interval::format_iso(today.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
         // 8-10 "a b", 10-11 untagged, 11-14 "a b c", 14-15 "c"
         let lines = format!(
             "inc {} - {} # a b\ninc {} - {}\ninc {} - {} # a b c\ninc {} - {} # c\n",
@@ -3086,7 +3086,7 @@ mod tests {
     fn today_at(h: i8, m: i8) -> String {
         let tz = jiff::tz::TimeZone::system();
         let ts = jiff::Zoned::now().date().at(h, m, 0, 0).to_zoned(tz).unwrap().timestamp();
-        timew_rs::interval::format_iso(ts.as_second())
+        timew_cli::interval::format_iso(ts.as_second())
     }
 
     #[test]
@@ -3416,7 +3416,7 @@ mod tests {
         assert_eq!(meetings.tags, vec!["meetings".to_string()]);
         let mut changed = meetings.clone();
         changed.add_tag("x");
-        timew_rs::modify_interval(&paths, &meetings, &changed, false).unwrap();
+        timew_cli::modify_interval(&paths, &meetings, &changed, false).unwrap();
         let after_other = today_file(&root);
 
         press(&mut app, 'u');

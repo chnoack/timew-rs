@@ -219,7 +219,7 @@ mod tests {
     use std::fs;
 
     fn tmp_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("timew-rs-tags-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("timew-cli-tags-test-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         dir.join(format!("{name}-tags.data"))
     }

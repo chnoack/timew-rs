@@ -1,4 +1,4 @@
-//! timew-rs: a Rust implementation of Timewarrior. The library holds the
+//! timew-cli: a Rust implementation of Timewarrior. The library holds the
 //! data model, the database, the configuration and all commands; it is
 //! shared by the `timew-cli` command line program and `timew-tui`.
 

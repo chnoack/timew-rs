@@ -245,7 +245,7 @@ mod tests {
     use crate::interval::parse_iso;
 
     fn tmp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("timew-rs-db-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("timew-cli-db-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

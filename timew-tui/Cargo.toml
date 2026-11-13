@@ -5,6 +5,6 @@ edition = "2024"
 description = "Terminal UI for browsing and editing a Timewarrior database"
 
 [dependencies]
-timew-rs = { path = "../timew-cli" }
+timew-cli = { path = "../timew-cli" }
 jiff = "0.2.42"
 ratatui = "0.30"

@@ -54,7 +54,7 @@ that data and correcting start and end times.
 
 | Path | What it is |
 | --- | --- |
-| `timew-cli/` | The `timew-rs` crate: the data model and commands (the `timew_rs` library), plus the `timew-cli` command |
+| `timew-cli/` | The `timew-cli` crate: the data model and commands (the `timew_cli` library), plus the `timew-cli` command |
 | `timew-tui/` | The `timew-tui` crate: the terminal UI, built on the library |
 | `examples/` | A generator for example data, plus two years of generated data |
 | `docs/` | Technical documentation (see below) |
