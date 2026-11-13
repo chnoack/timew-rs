@@ -134,6 +134,15 @@ impl RangeInput {
     }
 }
 
+/// The delete confirmation (`d`): the entry, its ID, and the entry before
+/// it, which `e` would extend over it.
+#[derive(Debug, Clone)]
+struct DeleteDialog {
+    interval: Interval,
+    id: u32,
+    previous: Option<Interval>,
+}
+
 /// State of the start dialog (`s`): tags and annotation of a new entry.
 #[derive(Debug, Clone, Default)]
 struct StartForm {
@@ -481,6 +490,8 @@ struct App {
     notice: Option<String>,
     /// Whether the notice reports a failure (red instead of green).
     notice_failed: bool,
+    /// Open delete confirmation (`d`).
+    confirm_delete: Option<DeleteDialog>,
     /// Open start dialog (`s`).
     start_form: Option<StartForm>,
     /// Screen areas of the start dialog's fields from the last draw.
@@ -564,6 +575,7 @@ impl App {
             notice_failed: false,
             last_edit: None,
             start_form: None,
+            confirm_delete: None,
             start_fields: [Rect::default(); 2],
             running: None,
             filter: Filter::Month,
@@ -652,6 +664,7 @@ impl App {
     fn table_has_focus(&self) -> bool {
         self.edit.is_none()
             && self.start_form.is_none()
+            && self.confirm_delete.is_none()
             && !self.info
             && self.legend.is_none()
             && self.picker.is_none()
@@ -774,6 +787,79 @@ impl App {
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
         paths
+    }
+
+    /// `d`: ask whether to delete the selected entry.
+    fn ask_delete(&mut self) {
+        let Some(t) = self.selected() else { return };
+        let (interval, id) = (t.interval.clone(), t.id);
+        // the entry before it may lie outside the shown period
+        let previous = Database::open(self.db_root.join("data"))
+            .ok()
+            .and_then(|mut db| timew_core::previous_interval(&mut db, &interval).ok().flatten());
+        self.confirm_delete = Some(DeleteDialog { interval, id, previous });
+    }
+
+    fn on_delete_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => self.delete_entry(),
+            KeyCode::Char('e') | KeyCode::Char('E') => self.delete_extending_previous(),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => self.confirm_delete = None,
+            _ => {}
+        }
+    }
+
+    /// Delete the entry of the confirmation dialog. The view stays as it
+    /// is; the selection stays on the same row.
+    fn delete_entry(&mut self) {
+        let Some(DeleteDialog { interval, .. }) = self.confirm_delete.take() else { return };
+        let paths = self.edit_paths();
+        match timew_core::delete_interval(&paths, &interval) {
+            Ok(changes) => {
+                let selected = self.table.selected();
+                self.last_edit = Some((interval, changes));
+                self.load();
+                if let Some(i) = selected
+                    && !self.summary.rows.is_empty()
+                {
+                    self.table.select(Some(i.min(self.summary.rows.len() - 1)));
+                }
+                self.notice = Some("Deleted. u undoes it.".to_string());
+                self.notice_failed = false;
+            }
+            Err(e) => {
+                self.notice = Some(format!("Not deleted: {e}"));
+                self.notice_failed = true;
+                self.load();
+            }
+        }
+    }
+
+    /// `e` in the delete dialog: delete the entry and extend the one before
+    /// it to its end. The extended entry is selected.
+    fn delete_extending_previous(&mut self) {
+        let Some(dialog) = &self.confirm_delete else { return };
+        if dialog.previous.is_none() {
+            return;
+        }
+        let interval = dialog.interval.clone();
+        self.confirm_delete = None;
+        let paths = self.edit_paths();
+        match timew_core::delete_extending_previous(&paths, &interval) {
+            Ok((extended, changes)) => {
+                self.last_edit = Some((interval, changes));
+                self.load();
+                self.select_interval(&extended);
+                let to = if extended.is_open() { "runs on".to_string() } else { format!("ends at {}", local_moment(extended.range.end)) };
+                self.notice = Some(format!("Deleted; the previous entry now {to}. u undoes it."));
+                self.notice_failed = false;
+            }
+            Err(e) => {
+                self.notice = Some(format!("Not deleted: {e}"));
+                self.notice_failed = true;
+                self.load();
+            }
+        }
     }
 
     /// `s`: stop the running entry, or ask for the tags and annotation of
@@ -1106,6 +1192,9 @@ impl App {
         if self.start_form.is_some() {
             return self.on_start_key(key);
         }
+        if self.confirm_delete.is_some() {
+            return self.on_delete_key(key);
+        }
         if self.info {
             // any key closes the info dialog
             self.info = false;
@@ -1146,7 +1235,8 @@ impl App {
             KeyCode::PageUp => self.scroll_by(-page),
             KeyCode::Home | KeyCode::Char('g') => self.scroll_by(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.scroll_by(isize::MAX / 2),
-            KeyCode::Char('1') | KeyCode::Char('d') => self.set_filter(Filter::Day),
+            KeyCode::Char('1') => self.set_filter(Filter::Day),
+            KeyCode::Char('d') => self.ask_delete(),
             KeyCode::Char('2') | KeyCode::Char('y') => self.set_filter(Filter::Yesterday),
             // Shift+3: '§' on German, '#' on US layouts (or '3' + SHIFT where reported)
             KeyCode::Char('§') | KeyCode::Char('#') | KeyCode::Char('M') => self.open_month_picker(),
@@ -1189,6 +1279,9 @@ impl App {
 
     fn on_mouse(&mut self, mouse: MouseEvent) {
         let pos = Position::new(mouse.column, mouse.row);
+        if self.confirm_delete.is_some() {
+            return; // only y or n answer it
+        }
         if let Some(form) = &mut self.start_form {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind
                 && let Some(i) = self.start_fields.iter().position(|r| r.contains(pos))
@@ -1462,6 +1555,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_year_picker(frame, body, app);
     draw_legend(frame, frame.area(), app);
     draw_start_form(frame, body, app);
+    draw_confirm_delete(frame, body, app);
     draw_info(frame, frame.area(), app);
 }
 
@@ -2014,6 +2108,72 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
+/// The delete confirmation (`d`): what would be deleted.
+fn draw_confirm_delete(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(DeleteDialog { interval: iv, id, previous }) = &app.confirm_delete else { return };
+    let label = |s: &'static str| Span::styled(format!("{s:<11}"), Style::new().fg(ACCENT).bold());
+    let none = || Span::styled("(none)", Style::new().dim());
+    let end = if iv.is_open() { "still tracking".to_string() } else { local_datetime(iv.range.end) };
+    let now = jiff::Timestamp::now().as_second();
+    let days = {
+        let date = |e: i64| local_date(e);
+        let last = if iv.is_open() { now } else { iv.range.end - 1 };
+        let (a, b) = (date(iv.range.start), date(last.max(iv.range.start)));
+        if a == b { None } else { Some(format!("{a} – {b}")) }
+    };
+    let mut lines = vec![
+        Line::styled("Delete this entry?", Style::new().bold()),
+        Line::raw(""),
+        Line::from(vec![label("ID"), Span::raw(format!("@{id}"))]),
+        Line::from(vec![label("Tags"), if iv.tags.is_empty() { none() } else { Span::raw(iv.tags.join(", ")) }]),
+        Line::from(vec![
+            label("Annotation"),
+            match &iv.annotation {
+                Some(a) if !a.is_empty() => Span::raw(a.clone()),
+                _ => none(),
+            },
+        ]),
+        Line::from(vec![label("Start"), Span::raw(local_datetime(iv.range.start))]),
+        Line::from(vec![label("End"), Span::raw(end)]),
+        Line::from(vec![label("Duration"), Span::styled(format_hm(iv.range.total(now)), Style::new().fg(Color::Yellow).bold())]),
+    ];
+    if let Some(span) = days {
+        lines.push(Line::from(vec![label("Spans"), Span::raw(span)]));
+    }
+    if let Some(p) = previous {
+        let tags = if p.tags.is_empty() { "(no tags)".to_string() } else { p.tags.join(", ") };
+        let new_end = if iv.is_open() { "still tracking".to_string() } else { local_moment(iv.range.end) };
+        lines.extend([
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("e", Style::new().fg(Color::Yellow).bold()),
+                Span::raw(" instead deletes it and extends the previous entry:"),
+            ]),
+            Line::from(vec![
+                label("  Previous"),
+                Span::raw(format!("{tags}, {} – {}", local_datetime(p.range.start), local_moment(p.range.end))),
+            ]),
+            Line::from(vec![label("  New end"), Span::styled(new_end, Style::new().fg(Color::Yellow).bold())]),
+        ]);
+    }
+    let text_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
+    let w = (text_w + PAD.left + PAD.right + 2).max(44).min(area.width);
+    let h = (lines.len() as u16 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Red))
+        .title(" Delete ")
+        .title_bottom(
+            Line::from(if previous.is_some() { " y delete · e delete + extend previous · n/Esc cancel " } else { " y delete · n/Esc cancel " })
+                .right_aligned()
+                .dim(),
+        )
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), popup);
+}
+
 /// The start dialog (`s`): tags and annotation for a new entry.
 fn draw_start_form(frame: &mut Frame, area: Rect, app: &mut App) {
     const LABEL_W: u16 = 12;
@@ -2282,7 +2442,7 @@ fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool, running:
     if !wide {
         items.extend([("b", "chart"), ("Enter", "details")]);
     }
-    items.push(("e", "edit"));
+    items.extend([("e", "edit"), ("d", "delete")]);
     items.extend([("PgUp/Dn", "page"), ("r", "reload"), ("i", "info")]);
 
     // Keep "q quit" at the end. If not everything fits, put "? help" (the
@@ -2323,7 +2483,7 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("mouse wheel", "scroll"),
         k("click a row", "select it (again: details, narrow window)"),
         h("Periods"),
-        k("1  d", "today"),
+        k("1", "today"),
         k("2  y", "yesterday"),
         k("3  m", "current month"),
         k("⇧3  § #  M", "pick a month of the shown year"),
@@ -2349,7 +2509,9 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("Enter", "save (overlaps are refused)"),
         k("⇧Enter  Alt+Enter", "save, adjusting overlapping entries"),
         k("Esc", "cancel"),
-        k("u", "undo the last saved edit, start or stop"),
+        k("d", "delete the selected entry (asks first: y deletes)"),
+        k("e", "in the delete dialog: delete, extend the previous entry"),
+        k("u", "undo the last saved edit, start, stop or delete"),
         h("Tracking"),
         k("s", "start a new entry (asks for tags and annotation)"),
         k("s", "stop the running entry (when one is running)"),
@@ -3961,5 +4123,93 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+
+
+    #[test]
+    fn d_deletes_the_selected_entry_after_asking() {
+        let root = sample_db("delete");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        assert_eq!(app.filter, Filter::Day);
+        assert!(footer(&mut app).contains("d delete"), "{}", footer(&mut app));
+        let before = today_file(&root);
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["meetings".to_string()]);
+
+        // n cancels
+        press(&mut app, 'd');
+        let screen = render_at(&mut app, 140, 24);
+        assert!(screen.contains("Delete this entry?") && screen.contains("y delete"), "{screen}");
+        press(&mut app, 'n');
+        assert!(app.confirm_delete.is_none());
+        assert_eq!(today_file(&root), before);
+
+        // only y deletes: Enter, other keys and clicks don't
+        press(&mut app, 'd');
+        key(&mut app, KeyCode::Enter);
+        press(&mut app, 'x');
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 1, row: 1, modifiers: KeyModifiers::NONE });
+        assert!(app.confirm_delete.is_some());
+        assert_eq!(today_file(&root), before);
+        press(&mut app, 'y');
+        assert!(app.confirm_delete.is_none());
+        assert!(!today_file(&root).contains("meetings"));
+        assert!(render_at(&mut app, 140, 24).contains("Deleted. u undoes it."));
+        assert_eq!(app.filter, Filter::Day, "the view stays");
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["email".to_string()], "the next entry is selected");
+
+        // u brings it back
+        press(&mut app, 'u');
+        assert_eq!(today_file(&root), before);
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["meetings".to_string()]);
+
+        // nothing selected: nothing to delete
+        app.filter = Filter::Month;
+        app.month = Some((2000, 1));
+        app.load();
+        press(&mut app, 'd');
+        assert!(app.confirm_delete.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn e_in_the_delete_dialog_extends_the_previous_entry() {
+        let root = sample_db("delete-prev");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        let before = today_file(&root);
+        // today: meetings 08-10, email 10-11; select email
+        press(&mut app, 'j');
+        assert_eq!(app.selected().unwrap().interval.tags, vec!["email".to_string()]);
+        press(&mut app, 'd');
+        let screen = render_at(&mut app, 140, 30);
+        println!("{screen}");
+        assert!(screen.contains("e instead deletes it and extends the previous entry"), "{screen}");
+        assert!(screen.contains("meetings,") && screen.contains("e delete + extend previous"));
+        press(&mut app, 'a'); // not the key for it
+        assert!(app.confirm_delete.is_some());
+        press(&mut app, 'e');
+        assert!(app.confirm_delete.is_none());
+        let data = today_file(&root);
+        assert!(!data.contains("email"));
+        assert!(data.contains(&format!("inc {} - {} # meetings", today_at(8, 0), today_at(11, 0))), "{data}");
+        let iv = app.selected().unwrap().interval.clone();
+        assert_eq!((iv.tags.clone(), iv.range.end), (vec!["meetings".to_string()], timew_core::interval::parse_iso(&today_at(11, 0)).unwrap()));
+        assert!(render_at(&mut app, 140, 24).contains("Deleted; the previous entry now ends at"));
+        press(&mut app, 'u');
+        assert_eq!(today_file(&root), before, "u restores both entries");
+
+        // the first entry of all has no previous one: no option, e does nothing
+        press(&mut app, '2');
+        press(&mut app, 'd');
+        let screen = render_at(&mut app, 140, 30);
+        assert!(!screen.contains("extend") && screen.contains("y delete · n/Esc cancel"), "{screen}");
+        press(&mut app, 'e');
+        assert!(app.confirm_delete.is_some(), "still asking");
+        press(&mut app, 'n');
+        let _ = fs::remove_dir_all(&root);
+    }
 
 }

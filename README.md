@@ -152,7 +152,8 @@ A separate program for browsing the summary interactively:
 - **Tracking:** `s` starts a new entry (asking for tags and annotation)
   or stops the running one; a running entry's details have a red border.
 - **Editing:** `e` edits the start and end date and time, the tags and the
-  annotation of the selected entry in the details panel. Overlaps are refused, or adjusted with
+  annotation of the selected entry in the details panel; `d` deletes it
+  after asking, optionally giving its time to the previous entry. Overlaps are refused, or adjusted with
   Shift+Enter (or Alt+Enter), and `u` undoes the last edit.
 
 Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/timew-tui.md).

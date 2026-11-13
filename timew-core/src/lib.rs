@@ -28,6 +28,9 @@ pub mod tags;
 pub mod text;
 pub mod validate;
 
-pub use edit::{modify_interval, start_interval, stop_interval, undo_change};
+pub use edit::{
+    delete_extending_previous, delete_interval, modify_interval, previous_interval, start_interval, stop_interval,
+    undo_change,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

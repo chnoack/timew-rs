@@ -1,5 +1,5 @@
 //! Changing entries, and undoing that: the editing functions of
-//! `timew-tui` (start, stop, modify). They open the configuration and the
+//! `timew-tui` (start, stop, modify, delete). They open the configuration and the
 //! database like the command line program does and save right away. Each
 //! returns the changes it made, which [`undo_change`] can revert.
 
@@ -102,8 +102,60 @@ pub fn stop_interval(paths: &paths::Paths) -> Result<(interval::Interval, Vec<Ch
     Ok((running, s.changes))
 }
 
-/// Revert the changes made by [`modify_interval`], [`start_interval`] or
-/// [`stop_interval`]. Only if the intervals
+/// Delete the stored interval `interval`, like `timew delete`.
+pub fn delete_interval(paths: &paths::Paths, interval: &interval::Interval) -> Result<Vec<Change>, String> {
+    let mut s = open_session(paths, datetime::now())?;
+    if !s.db.intervals()?.contains(interval) {
+        return Err("The entry was changed by another program. Press r to reload.".to_string());
+    }
+    s.delete(interval)?;
+    s.db.commit()?;
+    Ok(s.changes)
+}
+
+/// The stored entry right before `interval`: the one with the latest start
+/// before it that ends no later than `interval` starts.
+pub fn previous_interval(
+    db: &mut database::Database,
+    interval: &interval::Interval,
+) -> Result<Option<interval::Interval>, String> {
+    Ok(db
+        .intervals()?
+        .iter()
+        .filter(|i| {
+            i.range.start < interval.range.start && i.range.is_ended() && i.range.end <= interval.range.start && *i != interval
+        })
+        .max_by_key(|i| i.range.start)
+        .cloned())
+}
+
+/// Delete `interval` and extend the entry before it (see
+/// [`previous_interval`]) to its end, so that its time goes to the previous
+/// entry. If `interval` is still running, the previous entry runs on in its
+/// place. Returns the extended entry.
+pub fn delete_extending_previous(
+    paths: &paths::Paths,
+    interval: &interval::Interval,
+) -> Result<(interval::Interval, Vec<Change>), String> {
+    let mut s = open_session(paths, datetime::now())?;
+    if !s.db.intervals()?.contains(interval) {
+        return Err("The entry was changed by another program. Press r to reload.".to_string());
+    }
+    let Some(previous) = previous_interval(&mut s.db, interval)? else {
+        return Err("There is no entry before it.".to_string());
+    };
+    let mut extended = previous.clone();
+    extended.range.end = interval.range.end;
+    s.delete(interval)?;
+    s.delete(&previous)?;
+    validate::auto_adjust(&mut s, false, &extended)?;
+    s.add(&extended)?;
+    s.db.commit()?;
+    Ok((extended, s.changes))
+}
+
+/// Revert the changes made by [`modify_interval`], [`start_interval`],
+/// [`stop_interval`], [`delete_interval`] or [`delete_extending_previous`]. Only if the intervals
 /// they left behind are still stored unchanged, and the restored intervals
 /// don't overlap anything added since; otherwise nothing is changed.
 pub fn undo_change(paths: &paths::Paths, changes: &[Change]) -> Result<(), String> {
@@ -214,6 +266,58 @@ mod tests {
         let err = start_interval(&paths, &[], None).unwrap_err();
         let when = &datetime::format_local_iso(soon).replace('T', " ")[..16];
         assert_eq!(err, format!("A running entry would overlap an entry after now: {when} (planned)."));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn delete_and_undo() {
+        let root = std::env::temp_dir().join(format!("timew-core-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let paths = paths::Paths { config_dir: root.clone(), db_dir: root.clone() };
+        let start = make_local(2025, 3, 3, 8, 0, 0);
+        let mut iv = Interval::new(Range::new(start, start + 3600));
+        iv.add_tag("gone");
+        std::fs::write(root.join("data/2025-03.data"), format!("{}\n", iv.serialize())).unwrap();
+        let changes = delete_interval(&paths, &iv).unwrap();
+        assert!(!root.join("data/2025-03.data").exists());
+        assert!(delete_interval(&paths, &iv).unwrap_err().contains("changed by another program"));
+        undo_change(&paths, &changes).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("data/2025-03.data")).unwrap(), format!("{}\n", iv.serialize()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn delete_extending_the_previous_entry() {
+        let root = std::env::temp_dir().join(format!("timew-core-delete-extend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let paths = paths::Paths { config_dir: root.clone(), db_dir: root.clone() };
+        let at = |h: i64, m: i64| make_local(2025, 3, 3, h, m, 0);
+        let iv = |s: i64, e: i64, tag: &str| {
+            let mut i = Interval::new(Range::new(s, e));
+            i.add_tag(tag);
+            i
+        };
+        // a 08:00-09:00, gap, b 09:30-10:00, c 10:00-11:00
+        let (a, b, c) = (iv(at(8, 0), at(9, 0), "a"), iv(at(9, 30), at(10, 0), "b"), iv(at(10, 0), at(11, 0), "c"));
+        let file = root.join("data/2025-03.data");
+        std::fs::write(&file, format!("{}\n{}\n{}\n", a.serialize(), b.serialize(), c.serialize())).unwrap();
+        let mut db = database::Database::open(root.join("data")).unwrap();
+        assert_eq!(previous_interval(&mut db, &b).unwrap(), Some(a.clone()));
+        assert_eq!(previous_interval(&mut db, &c).unwrap(), Some(b.clone()));
+        assert_eq!(previous_interval(&mut db, &a).unwrap(), None);
+
+        // deleting c gives its hour to b
+        let (extended, changes) = delete_extending_previous(&paths, &c).unwrap();
+        assert_eq!(extended, iv(at(9, 30), at(11, 0), "b"));
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text, format!("{}\n{}\n", a.serialize(), extended.serialize()));
+        undo_change(&paths, &changes).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("{}\n{}\n{}\n", a.serialize(), b.serialize(), c.serialize()));
+        assert!(delete_extending_previous(&paths, &a).unwrap_err().contains("no entry before"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

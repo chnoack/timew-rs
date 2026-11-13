@@ -2,8 +2,9 @@
 
 A terminal UI for browsing a Timewarrior database. It shows the same rows
 as `timew summary`, with filters you can switch with single keys or the
-mouse. It can start and stop tracking (`s`) and change an entry's start,
-end, tags and annotation (`e`); nothing else is ever changed.
+mouse. It can start and stop tracking (`s`), change an entry's start,
+end, tags and annotation (`e`) and delete an entry (`d`); nothing else is
+ever changed.
 
 ```sh
 cargo build --release -p timew-tui
@@ -103,6 +104,23 @@ the running one otherwise. The help line shows `s start` or `s stop`.
 - `u` undoes a start or a stop like an edit.
 - Starting refuses if the new entry would overlap a later one; stopping
   refuses if the running entry starts in the future.
+
+### Deleting an entry
+
+`d` asks whether to delete the selected entry and shows it: ID, tags,
+annotation, start, end, duration, and the days it spans if it crosses
+midnight (the whole entry is deleted, not just the row of one day). Only
+`y` deletes; `n`, `Esc` or `q` cancel, and `Enter` does nothing, so an
+accidental keypress can't delete anything. The view stays as it is, the
+next entry is selected, and `u` brings the entry back.
+
+If there is an entry before it, the dialog also offers **`e`: delete it and
+extend the previous entry** to its end, so its time goes to the previous
+entry (filling a gap between them as well). The dialog shows which entry
+that is (it may be outside the shown period, e.g. yesterday's last entry
+for the first one of today) and its new end. If the deleted entry is still
+running, the previous entry runs on in its place. The extended entry is
+selected afterwards, and `u` undoes both changes.
 
 ### Editing an entry
 
@@ -234,9 +252,10 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `Enter` | Open or close the details (narrow layout) |
 | `s` | **Start** a new entry (asks for tags and annotation), or **stop** the running one |
 | `e` | **Edit** the start, end, tags and annotation of the selected entry |
-| `u` | **Undo** the last saved edit, start or stop (only shown while there is one) |
+| `d` | **Delete** the selected entry, after asking (`y` deletes) |
+| `u` | **Undo** the last saved edit, start, stop or delete (only shown while there is one) |
 | `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
-| `1` / `d` | Today |
+| `1` | Today |
 | `2` / `y` | Yesterday |
 | `3` / `m` | The current month |
 | **Shift+3** (`§` on German, `#` on US keyboards) / `M` | **Month list** |
@@ -274,6 +293,7 @@ legend (`?`) works the same way.
 | **Year list** (Shift+4) | The current year and the four before it, newest first · `↑↓`/`jk` and `g`/`G` move · `Enter`/`Space` select · `⌫` **current year** (same as `4`) · `Esc`/`q` close |
 | **Tag list** (`t`) | "All tags" plus every tag in the database with its entry count · `↑↓`/`jk`, `PgUp`/`PgDn` and `g`/`G` move · `Enter`/`Space` select · `⌫` **remove the tag filter** · `Esc`/`q`/`t` close |
 | **Date range** (`c`) | Type into **From**/**To** · `Tab`/`↑↓` or a click switches fields · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` apply · `Esc` cancel |
+| **Delete** (`d`) | Shows the entry (ID, tags, annotation, start, end, duration, and the days it spans) · `y` deletes · `e` deletes and extends the previous entry to its end (only offered if there is one; the dialog shows which) · `n`/`Esc`/`q` cancel · `Enter`, other keys and clicks do nothing |
 | **Start dialog** (`s`) | Type the tags and the annotation · `Tab`/`↑↓` switch fields · `←→`, `Home`/`End` move the cursor · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` start · `Esc` cancel |
 | **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous (start date, start time, end date, end time, tags, annotation) · in dates and times typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`); in the tags and the annotation it inserts · `←→`, `Home`/`End` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
 
