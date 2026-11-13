@@ -31,7 +31,7 @@ pub fn start_interval(s: &mut Session, range: Range) -> Result<i32, String> {
     if s.cli.has_hint("fill") {
         fill_start(s, &mut interval, 0)?;
     }
-    if auto_adjust(s, s.cli.has_hint("adjust"), &interval)? {
+    if auto_adjust(&mut s.core, s.cli.has_hint("adjust"), &interval)? {
         s.add(&interval)?;
     }
     if s.verbose() {

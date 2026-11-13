@@ -9,7 +9,6 @@ use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Default)]
 pub struct Extensions {
-    pub dir: PathBuf,
     /// Full paths, sorted.
     pub scripts: Vec<PathBuf>,
 }
@@ -19,7 +18,7 @@ impl Extensions {
         let entries = fs::read_dir(dir).map_err(|_| format!("Extension directory not readable: {}", dir.display()))?;
         let mut scripts: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
         scripts.sort();
-        Ok(Extensions { dir: dir.to_path_buf(), scripts })
+        Ok(Extensions { scripts })
     }
 
     /// File names, used as command names.

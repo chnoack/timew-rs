@@ -2,9 +2,10 @@
 name = "timew-tui"
 version = "0.3.0"
 edition = "2024"
+repository = "https://github.com/chnoack/timew-rs"
 description = "Terminal UI for browsing and editing a Timewarrior database"
 
 [dependencies]
-timew-cli = { path = "../timew-cli" }
+timew-core = { path = "../timew-core" }
 jiff = "0.2.42"
 ratatui = "0.30"

@@ -25,7 +25,7 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
         moved.range.end += delta;
     }
     s.delete(&original)?;
-    auto_adjust(s, s.cli.has_hint("adjust"), &moved)?;
+    auto_adjust(&mut s.core, s.cli.has_hint("adjust"), &moved)?;
     s.add(&moved)?;
     if s.verbose() {
         s.out.push_str(&format!("Moved @{id} to {}\n", crate::datetime::format_local_iso(moved.range.start)));

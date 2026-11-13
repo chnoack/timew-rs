@@ -130,11 +130,6 @@ impl Color {
         }
     }
 
-    pub fn blended(mut self, other: &Color) -> Color {
-        self.blend(other);
-        self
-    }
-
     fn mode(&self) -> Mode {
         let mode_of = |s: &Option<Shade>| match s {
             None | Some(Shade::Basic(_)) => Mode::Basic,
@@ -266,10 +261,6 @@ impl Palette {
 
     pub fn len(&self) -> usize {
         self.colors.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.colors.is_empty()
     }
 
     pub fn next_color(&mut self) -> Color {

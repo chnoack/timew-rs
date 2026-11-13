@@ -210,7 +210,7 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `↑` `↓` / `k` `j` | Move up or down a row |
 | `PgUp` `PgDn` / `Space` | Move a page |
 | `Home` `End` / `g` `G` | First or last row |
-| `Enter` / `i` | Open or close the details (narrow layout) |
+| `Enter` | Open or close the details (narrow layout) |
 | `e` | **Edit** the start, end, tags and annotation of the selected entry |
 | `u` | **Undo** the last saved edit (only shown while there is one) |
 | `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
@@ -225,7 +225,9 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `6` / `t` | **Tag list** |
 | `r` | Reload from disk |
 | `?` | Show the **key legend** (all keys in one window) |
-| `q` / `Esc` | Quit (in the narrow layout, `Esc` closes the chart or details panel first) |
+| `i` | Show the **info** dialog: the timew-tui version, the version of the `timew-core` library it uses, and the project page on GitHub. Any key or a click closes it. |
+| `Esc` | **Reset all filters**: back to the current month with all tags (a picked month or year and a date range are dropped). In the narrow layout it closes the chart or details panel first. It never quits. |
+| `q` | Quit |
 | `Ctrl+C` | Quit, from anywhere |
 
 ### Mouse
@@ -324,14 +326,14 @@ form, key legend, tag list, month list, year list, range form. Only if none
 is open does it reach the main view. `Ctrl+C` is handled before all of
 them.
 
-Saving an edit calls `timew_cli::modify_interval(paths, original, edited, adjust)`.
+Saving an edit calls `timew_core::modify_interval(paths, original, edited, adjust)`.
 It opens the configuration and the database like `timew-cli` does, checks
 that the entry is still stored unchanged (otherwise it asks for a reload
 with `r`), deletes it, checks the edited one for overlaps with
 `validate::auto_adjust`, adds it and commits. If anything fails, nothing
 is written. It returns every change it made (`session::Change`: an
 interval before and after), which the TUI keeps in `App::last_edit`; `u`
-passes them to `timew_cli::undo_change`, which reverts them, last first,
+passes them to `timew_core::undo_change`, which reverts them, last first,
 only if the intervals they left behind are still stored unchanged and the
 restored ones overlap nothing.
 

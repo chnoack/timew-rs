@@ -22,7 +22,7 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     let mut modified = found.interval.clone();
     fill(s, &mut modified, found.id)?;
     s.delete(&found.interval)?;
-    auto_adjust(s, s.cli.has_hint("adjust"), &modified)?;
+    auto_adjust(&mut s.core, s.cli.has_hint("adjust"), &modified)?;
     s.add(&modified)?;
     Ok(0)
 }

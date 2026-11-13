@@ -5,7 +5,7 @@
 //!   - quick filters: Day, Yesterday, Month (default), Year, a date range, a tag
 //!   - edit the start, end, tags and annotation of an entry (`e`); everything
 //!     else is read-only.
-//!     Edits go through the `timew-cli` library, so overlaps are refused;
+//!     Edits go through the `timew-core` library, so overlaps are refused;
 //!     `u` undoes the last edit.
 
 use std::env;
@@ -27,12 +27,12 @@ use ratatui::widgets::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
-use timew_cli::commands::summary::{self, Summary};
-use timew_cli::database::{Database, Tracked};
-use timew_cli::datetime::{expand_range_hint, make_local, parse_datetime};
-use timew_cli::interval::Interval;
-use timew_cli::paths::Paths;
-use timew_cli::range::Range;
+use timew_core::summary::{self, Summary};
+use timew_core::database::{Database, Tracked};
+use timew_core::datetime::{expand_range_hint, make_local, parse_datetime};
+use timew_core::interval::Interval;
+use timew_core::paths::Paths;
+use timew_core::range::Range;
 
 // ---------------------------------------------------------------------------
 // Database location
@@ -440,7 +440,7 @@ struct App {
     notice_failed: bool,
     /// The last saved edit, for `u`: the entry before the edit and every
     /// change the save made (including adjusted entries). Only in memory.
-    last_edit: Option<(Interval, Vec<timew_cli::session::Change>)>,
+    last_edit: Option<(Interval, Vec<timew_core::session::Change>)>,
     filter: Filter,
     range: Range,
     /// The range used by `Filter::Custom`, and the text it was entered as.
@@ -483,6 +483,8 @@ struct App {
     wide: bool,
     /// Whether the hours-per-tag bar chart is shown (in place of the details).
     chart: bool,
+    /// Whether the info dialog (`i`) is open.
+    info: bool,
     /// Open key legend (`?`), with its scroll offset in lines.
     legend: Option<u16>,
     /// Lines of the legend that fit on screen at the last draw (page size).
@@ -535,6 +537,7 @@ impl App {
             details: false,
             wide: false,
             chart: false,
+            info: false,
             legend: None,
             legend_page: 10,
             table_area: Rect::default(),
@@ -594,6 +597,7 @@ impl App {
     /// Keys go to the summary table: no form, list or legend is open.
     fn table_has_focus(&self) -> bool {
         self.edit.is_none()
+            && !self.info
             && self.legend.is_none()
             && self.picker.is_none()
             && self.month_picker.is_none()
@@ -669,7 +673,7 @@ impl App {
         let mut paths = Paths::from_env();
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
-        let (adjusted, actions) = match timew_cli::modify_interval(&paths, &form.original, &edited, adjust) {
+        let (adjusted, actions) = match timew_core::modify_interval(&paths, &form.original, &edited, adjust) {
             Ok(result) => result,
             Err(e) if e.starts_with("You cannot overlap") => {
                 return form.error = Some("Overlaps another entry. Shift+Enter adjusts it.".into());
@@ -711,7 +715,7 @@ impl App {
         let mut paths = Paths::from_env();
         paths.db_dir = self.db_root.clone();
         paths.config_dir = self.config_dir.clone();
-        match timew_cli::undo_change(&paths, &changes) {
+        match timew_core::undo_change(&paths, &changes) {
             Ok(()) => {
                 self.load();
                 self.select_interval(&before);
@@ -807,6 +811,21 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Back to the start view: the current month, all tags (`Esc`).
+    fn reset_filters(&mut self) {
+        let default = self.filter == Filter::Month && self.month.is_none() && self.year.is_none() && self.tag.is_none();
+        if default {
+            return;
+        }
+        self.filter = Filter::Month;
+        self.month = None;
+        self.year = None;
+        self.tag = None;
+        self.load();
+        self.notice = Some("All filters reset: current month, all tags.".to_string());
+        self.notice_failed = false;
     }
 
     fn set_filter(&mut self, filter: Filter) {
@@ -924,6 +943,11 @@ impl App {
         if self.edit.is_some() {
             return self.on_edit_key(key);
         }
+        if self.info {
+            // any key closes the info dialog
+            self.info = false;
+            return;
+        }
         if self.legend.is_some() {
             return self.on_legend_key(key);
         }
@@ -945,10 +969,12 @@ impl App {
             KeyCode::Esc if self.details && !self.wide => self.details = false,
             // the wide layout always shows the chart; b toggles it in the narrow one
             KeyCode::Char('b') if !self.wide => self.chart = !self.chart,
-            KeyCode::Enter | KeyCode::Char('i') => self.toggle_details(),
+            KeyCode::Enter => self.toggle_details(),
+            KeyCode::Char('i') => self.info = true,
             KeyCode::Char('e') => self.open_edit(),
             KeyCode::Char('u') => self.undo_edit(),
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Esc => self.reset_filters(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
             KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
@@ -999,6 +1025,12 @@ impl App {
 
     fn on_mouse(&mut self, mouse: MouseEvent) {
         let pos = Position::new(mouse.column, mouse.row);
+        if self.info {
+            if let MouseEventKind::Down(_) = mouse.kind {
+                self.info = false;
+            }
+            return;
+        }
         if let Some(form) = &mut self.edit {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind
                 && let Some(i) = self.edit_fields.iter().position(|r| r.contains(pos))
@@ -1255,6 +1287,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_month_picker(frame, body, app);
     draw_year_picker(frame, body, app);
     draw_legend(frame, frame.area(), app);
+    draw_info(frame, frame.area(), app);
 }
 
 /// One bar of the hours-per-tag chart (times in seconds).
@@ -2019,7 +2052,7 @@ fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool) {
         items.extend([("b", "chart"), ("Enter", "details")]);
     }
     items.push(("e", "edit"));
-    items.extend([("PgUp/Dn", "page"), ("r", "reload")]);
+    items.extend([("PgUp/Dn", "page"), ("r", "reload"), ("i", "info")]);
 
     // Keep "q quit" at the end. If not everything fits, put "? help" (the
     // full key legend) first and drop items from the end until it fits.
@@ -2071,7 +2104,7 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         h("Filter by tag"),
         k("6  t", "tag list"),
         h("Panels"),
-        k("Enter  i", "details (narrow window)"),
+        k("Enter", "details (narrow window)"),
         k("b", "hours-per-tag chart (narrow window)"),
         k("Esc", "close the chart / details (narrow window)"),
         h("Editing"),
@@ -2097,9 +2130,42 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         h("Other"),
         k("r", "reload from disk"),
         k("?", "this legend"),
-        k("q  Esc", "quit"),
+        k("i", "info: version and project page"),
+        k("Esc", "reset all filters (current month, all tags)"),
+        k("q", "quit"),
         k("Ctrl+C", "quit, from anywhere"),
     ]
+}
+
+/// The info dialog (`i`): version and project page.
+fn draw_info(frame: &mut Frame, area: Rect, app: &App) {
+    if !app.info {
+        return;
+    }
+    let label = |s: &'static str| Span::styled(format!("{s:<10}"), Style::new().fg(ACCENT).bold());
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("timew-tui ", Style::new().bold()),
+            Span::styled(env!("CARGO_PKG_VERSION"), Style::new().fg(Color::Yellow).bold()),
+        ]),
+        Line::styled(env!("CARGO_PKG_DESCRIPTION"), Style::new().dim()),
+        Line::raw(""),
+        Line::from(vec![label("Version"), Span::raw(env!("CARGO_PKG_VERSION"))]),
+        Line::from(vec![label("Library"), Span::raw(format!("timew-core {}", timew_core::VERSION))]),
+        Line::from(vec![label("Project"), Span::styled(env!("CARGO_PKG_REPOSITORY"), Style::new().fg(ACCENT).underlined())]),
+    ];
+    let text_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
+    let w = (text_w + PAD.left + PAD.right + 2).max(30).min(area.width);
+    let h = (lines.len() as u16 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(FOCUS))
+        .title(" Info ")
+        .title_bottom(Line::from(" any key closes ").right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 fn draw_legend(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -2241,7 +2307,7 @@ mod tests {
         let today = jiff::Zoned::now().date();
         let at = |d: jiff::civil::Date, h: i8| {
             let ts = d.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp();
-            timew_cli::interval::format_iso(ts.as_second())
+            timew_core::interval::format_iso(ts.as_second())
         };
         let yesterday = today.yesterday().unwrap();
         let mut lines = vec![
@@ -2367,7 +2433,7 @@ mod tests {
         key(&mut app, KeyCode::Esc);
         assert!(!app.details && !app.quit, "Esc closes the details first");
         key(&mut app, KeyCode::Esc);
-        assert!(app.quit);
+        assert!(!app.quit, "then it resets the filters, it never quits");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2385,10 +2451,10 @@ mod tests {
         assert!(header.contains("Entry details"));
         assert!(screen.contains("@3") && !screen.contains("Enter details"));
 
-        // Enter does nothing in the wide layout; Esc quits right away
+        // Enter does nothing in the wide layout; q quits
         key(&mut app, KeyCode::Enter);
         assert!(render_at(&mut app, 140, 24).contains("Entry details"));
-        key(&mut app, KeyCode::Esc);
+        press(&mut app, 'q');
         assert!(app.quit);
         let _ = fs::remove_dir_all(&root);
     }
@@ -2948,7 +3014,7 @@ mod tests {
         fs::create_dir_all(root.join("data")).unwrap();
         let tz = jiff::tz::TimeZone::system();
         let today = jiff::Zoned::now().date();
-        let at = |h: i8| timew_cli::interval::format_iso(today.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
+        let at = |h: i8| timew_core::interval::format_iso(today.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
         // 8-10 "a b", 10-11 untagged, 11-14 "a b c", 14-15 "c"
         let lines = format!(
             "inc {} - {} # a b\ninc {} - {}\ninc {} - {} # a b c\ninc {} - {} # c\n",
@@ -3110,7 +3176,7 @@ mod tests {
     fn today_at(h: i8, m: i8) -> String {
         let tz = jiff::tz::TimeZone::system();
         let ts = jiff::Zoned::now().date().at(h, m, 0, 0).to_zoned(tz).unwrap().timestamp();
-        timew_cli::interval::format_iso(ts.as_second())
+        timew_core::interval::format_iso(ts.as_second())
     }
 
     #[test]
@@ -3440,7 +3506,7 @@ mod tests {
         assert_eq!(meetings.tags, vec!["meetings".to_string()]);
         let mut changed = meetings.clone();
         changed.add_tag("x");
-        timew_cli::modify_interval(&paths, &meetings, &changed, false).unwrap();
+        timew_core::modify_interval(&paths, &meetings, &changed, false).unwrap();
         let after_other = today_file(&root);
 
         press(&mut app, 'u');
@@ -3475,6 +3541,63 @@ mod tests {
         press(&mut app, 'u');
         assert!(render_at(&mut app, 140, 24).contains("Not undone: It would overlap an entry added since."));
         assert_eq!(today_file(&root), before);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn i_shows_version_and_project_page() {
+        let root = sample_db("info");
+        let mut app = App::new(root.clone());
+        press(&mut app, '1');
+        assert!(footer(&mut app).contains("i info"), "{}", footer(&mut app));
+        press(&mut app, 'i');
+        let screen = render_at(&mut app, 140, 24);
+        println!("{screen}");
+        assert!(screen.contains(" Info "));
+        assert!(screen.contains(&format!("timew-tui {}", env!("CARGO_PKG_VERSION"))));
+        assert!(screen.contains(&format!("timew-core {}", timew_core::VERSION)));
+        assert!(screen.contains("https://github.com/chnoack/timew-rs"));
+        // it takes the keys: q closes it instead of quitting
+        press(&mut app, 'q');
+        assert!(!app.info && !app.quit);
+        assert!(!render_at(&mut app, 140, 24).contains(" Info "));
+        // a click closes it too
+        press(&mut app, 'i');
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 0, row: 0, modifiers: KeyModifiers::NONE });
+        assert!(!app.info);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn esc_resets_all_filters() {
+        let root = sample_db("esc-reset");
+        let mut app = App::new(root.clone());
+        let default_range = app.range;
+        // year, a tag, then Esc: back to the current month without a tag
+        press(&mut app, '4');
+        press(&mut app, 't');
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        assert!(app.tag.is_some() && app.filter == Filter::Year);
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.quit);
+        assert_eq!((app.filter, app.month, app.year, app.tag.clone()), (Filter::Month, None, None, None));
+        assert_eq!(app.range, default_range);
+        assert!(render(&mut app).contains("All filters reset"));
+        // a picked month and a custom range are reset too
+        app.month = Some((2020, 5));
+        app.load();
+        key(&mut app, KeyCode::Esc);
+        assert_eq!((app.filter, app.month), (Filter::Month, None));
+        app.filter = Filter::Custom;
+        app.load();
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(app.filter, Filter::Month);
+        // nothing to reset: nothing happens (and no quitting)
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.quit && app.notice.is_none());
         let _ = fs::remove_dir_all(&root);
     }
 

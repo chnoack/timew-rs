@@ -76,7 +76,7 @@ pub fn auto_adjust(s: &mut Session, adjust: bool, interval: &Interval) -> Result
             }
             s.add(&piece)?;
             if s.verbose() {
-                let text = crate::commands::summarize(&s.rules, &piece, s.now);
+                let text = (s.feedback)(&s.rules, &piece, s.now);
                 s.out.push_str(&text);
             }
         }

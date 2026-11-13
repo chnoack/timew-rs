@@ -22,7 +22,7 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     if s.cli.has_hint("fill") {
         fill(s, &mut interval, 0)?;
     }
-    auto_adjust(s, s.cli.has_hint("adjust"), &interval)?;
+    auto_adjust(&mut s.core, s.cli.has_hint("adjust"), &interval)?;
     let exclusions = s.exclusions(&range)?;
     for piece in flatten(&interval, &exclusions, s.now) {
         s.add(&piece)?;

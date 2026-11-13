@@ -54,8 +54,9 @@ that data and correcting start and end times.
 
 | Path | What it is |
 | --- | --- |
-| `timew-cli/` | The `timew-cli` crate: the data model and commands (the `timew_cli` library), plus the `timew-cli` command |
-| `timew-tui/` | The `timew-tui` crate: the terminal UI, built on the library |
+| `timew-core/` | The `timew-core` library: the data model, database, configuration, dates and overlaps, shared by both programs |
+| `timew-cli/` | The `timew-cli` command line program, built on `timew-core` |
+| `timew-tui/` | The `timew-tui` terminal UI, built on `timew-core` |
 | `examples/` | A generator for example data, plus two years of generated data |
 | `docs/` | Technical documentation (see below) |
 

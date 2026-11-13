@@ -22,7 +22,7 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     }
     s.delete(&later.interval)?;
     s.delete(&earlier.interval)?;
-    auto_adjust(s, s.cli.has_hint("adjust"), &combined)?;
+    auto_adjust(&mut s.core, s.cli.has_hint("adjust"), &combined)?;
     s.add(&combined)?;
     if s.verbose() {
         s.out.push_str(&format!("Joined @{} and @{}\n", later.id, earlier.id));

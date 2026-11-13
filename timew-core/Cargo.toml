@@ -1,0 +1,11 @@
+[package]
+name = "timew-core"
+version = "0.8.0"
+edition = "2024"
+repository = "https://github.com/chnoack/timew-rs"
+description = "The Timewarrior data model shared by timew-cli and timew-tui: database, configuration, dates, overlaps, edits"
+
+[dependencies]
+jiff = "0.2.42"
+serde_json = "1.0.145"
+unicode-width = "0.2.3"

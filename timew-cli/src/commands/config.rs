@@ -30,7 +30,8 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     };
     if s.verbose() {
         if changed {
-            s.out.push_str(&format!("Config file '{}' modified.\n", s.rules.file().display()));
+            let text = format!("Config file '{}' modified.\n", s.rules.file().display());
+            s.out.push_str(&text);
         } else {
             s.out.push_str("No changes made.\n");
         }
@@ -52,7 +53,8 @@ pub fn show(s: &mut Session) -> Result<i32, String> {
                     s.out.push('\n');
                 }
                 let value = s.rules.get(&name).unwrap_or("");
-                s.out.push_str(&format!("{}{part} = {value}\n", "  ".repeat(parts.len() - 1)));
+                let text = format!("{}{part} = {value}\n", "  ".repeat(parts.len() - 1));
+                s.out.push_str(&text);
             } else if previous.len() <= i || previous[i] != *part {
                 if i == 0 {
                     s.out.push('\n');

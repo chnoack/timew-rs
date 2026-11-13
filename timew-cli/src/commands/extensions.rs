@@ -12,7 +12,8 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
         table.set(row, 0, script.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string());
         table.set(row, 1, crate::extensions::status(script));
     }
-    s.out.push_str(&format!("\nExtensions located in:\n  {}\n\n", s.paths.extensions_dir().display()));
+    let text = format!("\nExtensions located in:\n  {}\n\n", s.paths.extensions_dir().display());
+    s.out.push_str(&text);
     s.out.push_str(&table.render());
     s.out.push('\n');
     Ok(0)

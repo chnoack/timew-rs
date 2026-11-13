@@ -42,7 +42,7 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     };
 
     interval.range = if range.is_started() { range } else { Range::new(s.now, 0) };
-    if auto_adjust(s, s.cli.has_hint("adjust"), &interval)? {
+    if auto_adjust(&mut s.core, s.cli.has_hint("adjust"), &interval)? {
         s.add(&interval)?;
     }
     if s.verbose() {

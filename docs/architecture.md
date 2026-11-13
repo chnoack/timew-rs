@@ -2,61 +2,74 @@
 
 ## Workspace layout
 
-The repository is a Cargo workspace with two crates, one per folder:
+The repository is a Cargo workspace with three crates, one per folder:
 
 ```
 timew-rs/                    the repository
-├── Cargo.toml               [workspace] members = ["timew-cli", "timew-tui"]
-├── timew-cli/               crate "timew-cli": the timew_cli library and the timew-cli command
+├── Cargo.toml               [workspace] members = ["timew-core", "timew-cli", "timew-tui"]
+├── timew-core/              library "timew_core": the shared data model
 │   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs           module overview, VERSION
+│       ├── interval.rs      one interval: .data line and JSON forms
+│       ├── datafile.rs      one YYYY-MM.data file; atomic writes
+│       ├── database.rs      all datafiles + tags.data; IDs
+│       ├── tags.rs          tags.data (tag -> usage count)
+│       ├── rules.rs         timewarrior.cfg: defaults, parsing, editing
+│       ├── paths.rs         where config and data live; first-run setup
+│       ├── exclusion.rs     exclusions and holidays
+│       ├── range.rs         half-open time ranges and range arithmetic
+│       ├── datetime.rs      date parsing, local calendar math, range hints
+│       ├── duration.rs      duration parsing and formats
+│       ├── session.rs       configuration + database + feedback; records changes
+│       ├── validate.rs      overlaps (:adjust) and :fill
+│       ├── summary.rs       the rows of a summary (shared by both programs)
+│       ├── edit.rs          change one entry and undo that (used by the TUI)
+│       └── text.rs          widths, wrapping, quoting, JSON strings
+├── timew-cli/               program "timew-cli": the command line
+│   ├── Cargo.toml           depends on timew-core
 │   ├── src/
-│   │   ├── main.rs          the timew-cli binary: calls timew_cli::run, prints
-│   │   ├── lib.rs           startup: hints, paths, configuration, database
+│   │   ├── main.rs          entry point; makes the core modules available as crate::…
+│   │   ├── app.rs           startup: hints, paths, configuration, database, extensions
+│   │   ├── session.rs       the core session + the parsed command line + extensions
 │   │   ├── cli.rs           classifies arguments; the range grammar
-│   │   ├── session.rs       one run: database + config + output; records changes
-│   │   ├── validate.rs      overlaps (:adjust) and :fill
 │   │   ├── commands/        one module per command (dispatch in mod.rs)
-│   │   ├── datetime.rs      date parsing, local calendar math, range hints
-│   │   ├── duration.rs      duration parsing and formats
-│   │   ├── range.rs         half-open time ranges and range arithmetic
-│   │   ├── interval.rs      one interval: .data line and JSON forms
-│   │   ├── datafile.rs      one YYYY-MM.data file; atomic writes
-│   │   ├── database.rs      all datafiles + tags.data; IDs
-│   │   ├── tags.rs          tags.data (tag -> usage count)
-│   │   ├── rules.rs         timewarrior.cfg: defaults, parsing, editing
-│   │   ├── paths.rs         where config and data live; first-run setup
-│   │   ├── exclusion.rs     exclusions and holidays
-│   │   ├── extensions.rs    extension reports (running scripts)
 │   │   ├── table.rs         column layout for the text reports
 │   │   ├── composite.rs     layered text for the charts
 │   │   ├── color.rs         color specifications -> ANSI codes
-│   │   └── text.rs          widths, wrapping, quoting, JSON strings
+│   │   └── extensions.rs    extension reports (running scripts)
 │   └── tests/cli.rs         end-to-end tests of the binary
-└── timew-tui/               crate "timew-tui"
-    ├── Cargo.toml           depends on timew-cli (path = "../timew-cli"), ratatui, jiff
+└── timew-tui/               program "timew-tui": the terminal UI
+    ├── Cargo.toml           depends on timew-core, ratatui, jiff
     └── src/main.rs          the whole TUI (state, input, drawing, tests)
 ```
 
-The `timew-cli` crate builds the **`timew_cli` library** and the
-**`timew-cli` binary**. Each crate has its own version (in its
-`Cargo.toml`); `timew-cli --version` prints it. The workspace shares
-one `Cargo.lock` and one `target/` directory at the top.
-`timew-tui` uses only the library. Keeping the TUI in
-its own crate means `ratatui` is never compiled into `timew-cli`.
+- **`timew-core`** holds everything both programs need: the files, the
+  configuration, dates, overlaps, the summary rows and the edit functions.
+  It has no command line parsing and no terminal output.
+- **`timew-cli`** is the command line program on top of it: argument
+  parsing, the commands, and their text output (tables, charts, colors).
+- **`timew-tui`** is the terminal UI on top of the same core. It doesn't
+  depend on `timew-cli`, and `ratatui` is never compiled into `timew-cli`.
+
+Each crate has its own version (in its `Cargo.toml`); `timew-cli
+--version` prints the CLI's, the TUI's info dialog (`i`) shows its own and
+the core's. The workspace shares one `Cargo.lock` and one `target/`
+directory at the top.
 
 Dependencies are deliberately few:
 
 | Crate | Used for |
 | --- | --- |
 | `jiff` | Time zones, local-time calendar math, ISO week numbers |
-| `serde`, `serde_json` | Reading JSON (`tags.data`, `import`) |
+| `serde_json` | Reading JSON (`tags.data`, `import`) |
 | `unicode-width` | Display width of characters in tables and charts |
 | `ratatui` (TUI only) | Terminal UI widgets; its bundled `crossterm` handles terminal input/output |
 
 ## One run of `timew-cli`
 
 ```
-main.rs ── timew_cli::run(args)
+main.rs ── app::run(args)
              │
              ├─ cli::Cli::parse            hints such as :yes, :quiet, :color
              ├─ paths::Paths::initialize   create directories / config file if missing
@@ -74,10 +87,14 @@ main.rs ── timew_cli::run(args)
   is done (or before a confirmation question). Errors are returned as
   `Err(String)`, printed to stderr, and give exit status 255; on an error
   the database is not committed.
-- **`Session`** is the only place that changes intervals: `add`, `delete`
-  and `modify` record each change in `Session::changes` (in memory only;
-  `timew-tui` uses it to undo an edit) and print the "new tag" notes.
-  There is no undo journal.
+- **`Session`** (in `timew-core`) is the only place that changes
+  intervals: `add`, `delete` and `modify` record each change in
+  `Session::changes` (in memory only; `timew-tui` uses it to undo an edit)
+  and print the "new tag" notes. There is no undo journal. The CLI's own
+  `Session` wraps it together with the parsed command line and the
+  extensions, and dereferences to it, so a command uses both through one
+  value. `Session::feedback` is how the core shows a recorded interval;
+  the CLI sets it to its "Recorded …" text (`commands::summarize`).
 - **Reading** goes through `Session::tracked()` (all intervals with IDs,
   newest first), `tracked_in(range, tags)` and `tracked_ids(ids)` (both
   oldest first). These include the synthetic pieces of a running interval
@@ -88,14 +105,14 @@ main.rs ── timew_cli::run(args)
 
 ### The summary as structured data
 
-`commands::summary` is split in two:
+The summary is split in two:
 
-- `summary::build(&Range, &[Tracked]) -> Summary` produces a `Vec<Row>` and
+- `timew_core::summary::build(&Range, &[Tracked]) -> Summary` produces a `Vec<Row>` and
   the grand total. Each `Row` holds the text of every cell (week, date, day,
   ID, tags, annotation, start, end, time, daily total) plus `source`, the
   index of the `Tracked` it came from.
-- `summary::render` lays the rows out as the `timew summary` table, with
-  the columns the configuration asks for.
+- `render` in `timew-cli`'s `commands::summary` lays the rows out as the
+  `timew summary` table, with the columns the configuration asks for.
 
 The CLI uses both. The TUI uses only `build`, then draws the rows in a
 ratatui `Table` and uses `source` to find the full interval for the details
@@ -157,13 +174,15 @@ cd /tmp/tw/test && for t in *.t; do python3 $t; done 2>&1 | grep -E '^(ok|not ok
 
 ## Extending
 
-- **A new command:** add `commands/<name>.rs` with
+- **A new command:** in `timew-cli`, add `commands/<name>.rs` with
   `pub fn run(s: &mut Session) -> Result<i32, String>`, register it in
   `commands/mod.rs` (`dispatch`) and add its name to `cli::COMMANDS`.
+- **Something both programs need** belongs in `timew-core`; output
+  formatting for the terminal and argument handling stay in `timew-cli`.
 - **Changing data:** use `Session::add`/`delete`/`modify`, and call
   `validate::auto_adjust` before adding an interval that might overlap.
 - **The TUI** reads through `Database::open`, `all_tracked`,
   `tracked_in_range` and `summary::build`. Its only write is
-  `timew_cli::modify_interval` (editing an entry), which goes through
+  `timew_core::modify_interval` (editing an entry), which goes through
   `Session`, so it is checked for overlaps like a command; its
   `undo_change` reverts the last edit.
