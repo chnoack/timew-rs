@@ -141,7 +141,7 @@ A separate program for browsing the summary interactively:
 - **Details:** a side panel for the selected entry when the window is wide
   enough, otherwise a bottom panel opened with `Enter`.
 - **Chart:** a bar chart of the hours per tag for the entries in the list,
-  with one color per tag. An entry with several tags is split evenly among
+  where neighboring bars always have clearly different colors. An entry with several tags is split evenly among
   them, so the bars add up to the total; the time shared with other tags is
   shown in a lighter shade. It's always shown below the details in a wide
   window; in a narrow one, `b` shows it.

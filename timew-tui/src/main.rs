@@ -1140,37 +1140,49 @@ const ACCENT: Color = Color::Cyan;
 const FOCUS: Color = Color::Yellow;
 /// Wk/Date/Day colors, alternating from one ISO week to the next.
 const WEEK_COLORS: [Color; 2] = [Color::Cyan, Color::Magenta];
-/// Colors for the tags in the chart, assigned in alphabetical tag order.
-/// Chart colors per tag as (strong, light) pairs from the 256-color palette:
-/// strong for the tag's own share of the time, light for the time it shares
-/// with other tags.
+/// Colors of the chart bars as (strong, light) pairs from the 256-color
+/// palette: strong for a tag's own share of the time, light for the time it
+/// shares with other tags. The bars take them in order, top to bottom, so
+/// the order is chosen such that every color clearly differs from the ones
+/// before and after it (also from the last back to the first, for charts
+/// with more bars than colors).
 const TAG_COLORS: [(Color, Color); 12] = [
     (Color::Indexed(31), Color::Indexed(117)),  // blue
-    (Color::Indexed(127), Color::Indexed(219)), // magenta
-    (Color::Indexed(28), Color::Indexed(120)),  // green
     (Color::Indexed(166), Color::Indexed(216)), // orange
+    (Color::Indexed(28), Color::Indexed(120)),  // green
+    (Color::Indexed(127), Color::Indexed(219)), // magenta
     (Color::Indexed(37), Color::Indexed(159)),  // cyan
     (Color::Indexed(124), Color::Indexed(210)), // red
-    (Color::Indexed(136), Color::Indexed(229)), // olive
-    (Color::Indexed(55), Color::Indexed(147)),  // purple
-    (Color::Indexed(94), Color::Indexed(180)),  // brown
-    (Color::Indexed(162), Color::Indexed(218)), // pink
-    (Color::Indexed(24), Color::Indexed(153)),  // steel blue
     (Color::Indexed(64), Color::Indexed(193)),  // lime
+    (Color::Indexed(55), Color::Indexed(147)),  // purple
+    (Color::Indexed(136), Color::Indexed(229)), // olive
+    (Color::Indexed(24), Color::Indexed(153)),  // steel blue
+    (Color::Indexed(162), Color::Indexed(218)), // pink
+    (Color::Indexed(94), Color::Indexed(180)),  // brown
 ];
+
+/// The chart's name for time without tags.
+const NO_TAG: &str = "(no tag)";
 
 /// Gray (strong, light) pair, for "(no tag)" and the legend.
 const GRAY_COLORS: (Color, Color) = (Color::Indexed(244), Color::Indexed(250));
 
-/// A tag's (strong, light) chart colors. They come from the tag's position
-/// among all tags in the database, so a tag keeps its colors when the
-/// filters change. Tags beyond the palette reuse its colors; "(no tag)" is
-/// gray.
-fn tag_colors(app: &App, tag: &str) -> (Color, Color) {
-    match app.all_tags.iter().position(|(t, _)| t == tag) {
-        Some(i) => TAG_COLORS[i % TAG_COLORS.len()],
-        None => GRAY_COLORS,
-    }
+/// The (strong, light) colors of each bar of the chart: the palette in
+/// order, so that neighboring bars always differ; "(no tag)" is gray (and
+/// doesn't use up a palette color).
+fn bar_colors(totals: &[TagTotal]) -> Vec<(Color, Color)> {
+    let mut next = 0;
+    totals
+        .iter()
+        .map(|t| {
+            if t.tag == NO_TAG {
+                GRAY_COLORS
+            } else {
+                next += 1;
+                TAG_COLORS[(next - 1) % TAG_COLORS.len()]
+            }
+        })
+        .collect()
 }
 
 /// For each summary row, 0 or 1: flips whenever the ISO week (week-year +
@@ -1268,7 +1280,7 @@ fn tag_totals(app: &App) -> Vec<TagTotal> {
         let secs = parse_hms(&row.time).unwrap_or(0) as f64;
         let tags = &app.tracked[row.source].interval.tags;
         if tags.is_empty() {
-            totals.entry("(no tag)".to_string()).or_default().0 += secs;
+            totals.entry(NO_TAG.to_string()).or_default().0 += secs;
         }
         let share = secs / tags.len().max(1) as f64;
         for tag in tags {
@@ -1377,11 +1389,12 @@ fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
     let fixed = name_w + 2 + (2 + value_w + 2) + shared_cols + (2 + 3 + 2);
     let bar_w = (inner.width as usize).saturating_sub(fixed).max(1);
 
+    let colors = bar_colors(&totals);
     let mut lines: Vec<Line> = totals
         .iter()
+        .zip(colors)
         .take(shown)
-        .map(|t| {
-            let (strong, light) = tag_colors(app, &t.tag);
+        .map(|(t, (strong, light))| {
             let pct = if sum > 0.0 { t.share * 100.0 / sum } else { 0.0 };
             let mut spans = vec![Span::styled(format!("{:<name_w$}  ", t.tag), Style::new().fg(strong))];
             spans.extend(stacked_bar(t.share / max, t.shared / max, bar_w, strong, light));
@@ -2862,17 +2875,27 @@ mod tests {
     }
 
     #[test]
-    fn tags_have_stable_distinct_colors() {
+    fn neighboring_bars_have_different_colors() {
+        let total = |tag: &str| TagTotal { tag: tag.to_string(), share: 1.0, shared: 0.0 };
+        // more bars than colors, with "(no tag)" in between
+        let mut totals: Vec<TagTotal> = (0..20).map(|i| total(&format!("t{i}"))).collect();
+        totals.insert(5, total(NO_TAG));
+        let colors = bar_colors(&totals);
+        assert_eq!(colors[0], TAG_COLORS[0]);
+        assert_eq!(colors[5], GRAY_COLORS, "no tag is gray");
+        assert_eq!(colors[6], TAG_COLORS[5], "gray doesn't use up a color");
+        for pair in colors.windows(2) {
+            assert_ne!(pair[0].0, pair[1].0, "neighbors differ: {pair:?}");
+        }
+        // the palette itself: no color twice, and it wraps around to a different one
+        for (i, c) in TAG_COLORS.iter().enumerate() {
+            assert!(TAG_COLORS.iter().skip(i + 1).all(|d| d != c));
+        }
+
+        // drawn: the bars top to bottom take the palette in order
         let root = sample_db("colors");
         let mut app = App::new(root.clone());
-        press(&mut app, '4');
-        let colors: Vec<_> = ["email", "meetings", "planning"].iter().map(|t| tag_colors(&app, t)).collect();
-        assert_eq!(colors, vec![TAG_COLORS[0], TAG_COLORS[1], TAG_COLORS[2]]);
-        assert_eq!(tag_colors(&app, "(no tag)"), GRAY_COLORS);
-        // a filter doesn't change a tag's color
         press(&mut app, '1');
-        assert_eq!(tag_colors(&app, "meetings"), TAG_COLORS[1]);
-        // the bars are drawn in those colors
         let mut terminal = Terminal::new(TestBackend::new(140, 34)).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buf = terminal.backend().buffer().clone();
@@ -2882,8 +2905,9 @@ mod tests {
             let x = (0..buf.area.width).find(|&x| buf[(x, y)].symbol() == "█").unwrap();
             buf[(x, y)].fg
         };
-        assert_eq!(bar_color("meetings"), TAG_COLORS[1].0);
-        assert_eq!(bar_color("email"), TAG_COLORS[0].0);
+        // today: meetings 2 h (first bar), email 1 h (second)
+        assert_eq!(bar_color("meetings"), TAG_COLORS[0].0);
+        assert_eq!(bar_color("email"), TAG_COLORS[1].0);
         let _ = fs::remove_dir_all(&root);
     }
 

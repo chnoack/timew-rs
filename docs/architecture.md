@@ -38,7 +38,8 @@ timew-rs/                    the repository
 ```
 
 The `timew-cli` crate builds the **`timew_cli` library** and the
-**`timew-cli` binary**. Both crates have version 0.2.0. The workspace shares
+**`timew-cli` binary**. Each crate has its own version (in its
+`Cargo.toml`); `timew-cli --version` prints it. The workspace shares
 one `Cargo.lock` and one `target/` directory at the top.
 `timew-tui` uses only the library. Keeping the TUI in
 its own crate means `ratatui` is never compiled into `timew-cli`.

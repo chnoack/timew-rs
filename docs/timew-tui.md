@@ -187,11 +187,13 @@ is the tag's strong color and the second part a lighter shade of it.)
 - **Entries without a tag** are shown as "(no tag)", in gray.
 - **Legend:** when there is shared time, the Total line explains the two
   shades.
-- **Colors:** every tag has its own color pair (strong and light) from the
-  256-color palette, used for its name and its bar. The pair comes from the
-  tag's position in the alphabetical list of all tags in the database, so a
-  tag keeps its colors when you change the filters. There are 12 pairs;
-  after that they repeat.
+- **Colors:** every bar has a color pair (strong and light) from the
+  256-color palette, used for the tag's name and its bar. The bars take the
+  12 pairs in order from the top, and the pairs are ordered so that each
+  one clearly differs from the one before and after it, so **neighboring
+  bars never have the same or a similar color**, also with more than 12
+  bars. "(no tag)" is gray. Because the colors follow the bars' order, a
+  tag's color can change when the filters change.
 - **Space:** in a narrow window, at most 10 tags are shown. In a wide window,
   the chart uses the height left below the details. If that isn't enough
   for every tag, the total line is dropped first, then the smallest tags are
@@ -348,7 +350,7 @@ Layout constants:
 | `DETAILS_MIN_WIDTH` | 44: the minimum width of the side panel |
 | `DETAILS_HEIGHT` | The height of the bottom details panel |
 | `CHART_MAX_BARS` | 10: the most bars in the bottom chart panel |
-| `TAG_COLORS` | The 12 (strong, light) chart color pairs, assigned in alphabetical tag order (`tag_colors`) |
+| `TAG_COLORS` | The 12 (strong, light) chart color pairs, given to the bars in order (`bar_colors`); neighbors in the list contrast |
 | `WEEK_COLORS` | `[Cyan, Magenta]`, alternating per ISO week (`week_parity`) |
 | `ACCENT` | Cyan, for highlights |
 | `FOCUS` | Yellow, the border of the view with the keyboard focus (`App::table_has_focus`) |
