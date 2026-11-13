@@ -19,7 +19,7 @@ data contains future entries.
 
 ```sh
 export TIMEWARRIORDB=$PWD/examples/pm-2025
-./target/release/timew-rs summary :lastyear | tail -2     # 2086:35:00
+./target/release/timew-cli summary :lastyear | tail -2     # 2086:35:00
 ```
 
 ## What the data looks like

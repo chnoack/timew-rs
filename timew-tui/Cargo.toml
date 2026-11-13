@@ -1,10 +1,10 @@
 [package]
 name = "timew-tui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Read-only terminal UI for a Timewarrior database"
+description = "Terminal UI for browsing and editing a Timewarrior database"
 
 [dependencies]
-timew-rs = { path = ".." }
+timew-rs = { path = "../timew-cli" }
 jiff = "0.2.42"
 ratatui = "0.30"

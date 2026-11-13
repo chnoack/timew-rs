@@ -1,6 +1,6 @@
 //! timew-rs: a Rust implementation of Timewarrior. The library holds the
 //! data model, the database, the configuration and all commands; it is
-//! shared by the `timew-rs` command line program and `timew-tui`.
+//! shared by the `timew-cli` command line program and `timew-tui`.
 
 pub mod cli;
 pub mod color;

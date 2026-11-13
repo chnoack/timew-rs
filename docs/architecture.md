@@ -2,42 +2,46 @@
 
 ## Workspace layout
 
-The repository is a Cargo workspace with two crates:
+The repository is a Cargo workspace with two crates, one per folder:
 
 ```
-timew-rs/                    crate "timew-rs" (workspace root)
-├── Cargo.toml               package + [workspace] members = ["timew-tui"]
-├── src/
-│   ├── main.rs              the timew-rs binary: calls timew_rs::run, prints
-│   ├── lib.rs               startup: hints, paths, configuration, database
-│   ├── cli.rs               classifies arguments; the range grammar
-│   ├── session.rs           one run: database + config + output; records changes
-│   ├── validate.rs          overlaps (:adjust) and :fill
-│   ├── commands/            one module per command (dispatch in mod.rs)
-│   ├── datetime.rs          date parsing, local calendar math, range hints
-│   ├── duration.rs          duration parsing and formats
-│   ├── range.rs             half-open time ranges and range arithmetic
-│   ├── interval.rs          one interval: .data line and JSON forms
-│   ├── datafile.rs          one YYYY-MM.data file; atomic writes
-│   ├── database.rs          all datafiles + tags.data; IDs
-│   ├── tags.rs              tags.data (tag -> usage count)
-│   ├── rules.rs             timewarrior.cfg: defaults, parsing, editing
-│   ├── paths.rs             where config and data live; first-run setup
-│   ├── exclusion.rs         exclusions and holidays
-│   ├── extensions.rs        extension reports (running scripts)
-│   ├── table.rs             column layout for the text reports
-│   ├── composite.rs         layered text for the charts
-│   ├── color.rs             color specifications -> ANSI codes
-│   └── text.rs              widths, wrapping, quoting, JSON strings
-├── tests/cli.rs             end-to-end tests of the binary
+timew-rs/                    the repository
+├── Cargo.toml               [workspace] members = ["timew-cli", "timew-tui"]
+├── timew-cli/               crate "timew-rs": the timew_rs library and the timew-cli command
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── main.rs          the timew-cli binary: calls timew_rs::run, prints
+│   │   ├── lib.rs           startup: hints, paths, configuration, database
+│   │   ├── cli.rs           classifies arguments; the range grammar
+│   │   ├── session.rs       one run: database + config + output; records changes
+│   │   ├── validate.rs      overlaps (:adjust) and :fill
+│   │   ├── commands/        one module per command (dispatch in mod.rs)
+│   │   ├── datetime.rs      date parsing, local calendar math, range hints
+│   │   ├── duration.rs      duration parsing and formats
+│   │   ├── range.rs         half-open time ranges and range arithmetic
+│   │   ├── interval.rs      one interval: .data line and JSON forms
+│   │   ├── datafile.rs      one YYYY-MM.data file; atomic writes
+│   │   ├── database.rs      all datafiles + tags.data; IDs
+│   │   ├── tags.rs          tags.data (tag -> usage count)
+│   │   ├── rules.rs         timewarrior.cfg: defaults, parsing, editing
+│   │   ├── paths.rs         where config and data live; first-run setup
+│   │   ├── exclusion.rs     exclusions and holidays
+│   │   ├── extensions.rs    extension reports (running scripts)
+│   │   ├── table.rs         column layout for the text reports
+│   │   ├── composite.rs     layered text for the charts
+│   │   ├── color.rs         color specifications -> ANSI codes
+│   │   └── text.rs          widths, wrapping, quoting, JSON strings
+│   └── tests/cli.rs         end-to-end tests of the binary
 └── timew-tui/               crate "timew-tui"
-    ├── Cargo.toml           depends on timew-rs (path = ".."), ratatui, jiff
+    ├── Cargo.toml           depends on timew-rs (path = "../timew-cli"), ratatui, jiff
     └── src/main.rs          the whole TUI (state, input, drawing, tests)
 ```
 
-The `timew-rs` crate builds a **library** and the **`timew-rs` binary**.
+The `timew-rs` crate (folder `timew-cli`) builds the **`timew_rs`
+library** and the **`timew-cli` binary**. Both crates have version 0.2.0. The workspace shares
+one `Cargo.lock` and one `target/` directory at the top.
 `timew-tui` uses only the library. Keeping the TUI in
-its own crate means `ratatui` is never compiled into `timew-rs`.
+its own crate means `ratatui` is never compiled into `timew-cli`.
 
 Dependencies are deliberately few:
 
@@ -48,7 +52,7 @@ Dependencies are deliberately few:
 | `unicode-width` | Display width of characters in tables and charts |
 | `ratatui` (TUI only) | Terminal UI widgets; its bundled `crossterm` handles terminal input/output |
 
-## One run of `timew-rs`
+## One run of `timew-cli`
 
 ```
 main.rs ── timew_rs::run(args)
@@ -116,13 +120,13 @@ the same `source`.
 ## Testing
 
 ```sh
-cargo test --workspace
+cargo test
 ```
 
 - **Library (unit tests in each module):** date and duration parsing,
   range arithmetic, the configuration parser, colors, table layout, the
   the database files.
-- **Command line (`tests/cli.rs`):** runs the `timew-rs` binary in
+- **Command line (`timew-cli/tests/cli.rs`):** runs the `timew-cli` binary in
   throwaway databases (with `TZ=Europe/Berlin`, 80 columns) and compares
   output and files with what the original `timew` produced for the same
   commands.
@@ -137,16 +141,16 @@ cargo test --workspace
 
 ### Timewarrior's own test suite
 
-`timew-rs` also passes the Python test suite of the original project
+`timew-cli` also passes the Python test suite of the original project
 (`test/*.t` in the Timewarrior repository; the exceptions are `undo.t`,
 since there is no `undo` command, and tests that fail for the original
 too, such as those needing installed man pages).
 The suite runs `../../src/timew` relative to its `basetest` directory, so
-point that at `timew-rs`:
+point that at `timew-cli`:
 
 ```sh
 cp -r ~/src/timewarrior/test ~/src/timewarrior/ext /tmp/tw/   # test/ and ext/
-mkdir -p /tmp/tw/src && ln -s $PWD/target/release/timew-rs /tmp/tw/src/timew
+mkdir -p /tmp/tw/src && ln -s $PWD/target/release/timew-cli /tmp/tw/src/timew
 cd /tmp/tw/test && for t in *.t; do python3 $t; done 2>&1 | grep -E '^(ok|not ok)'
 ```
 

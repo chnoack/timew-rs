@@ -1,8 +1,8 @@
 # Database format
 
-`timew-rs` and `timew-tui` use the same files as Timewarrior, so they work
+`timew-cli` and `timew-tui` use the same files as Timewarrior, so they work
 on an existing Timewarrior database, and Timewarrior can read everything
-`timew-rs` writes. This page describes the files as `timew-rs` reads and
+`timew-cli` writes. This page describes the files as `timew-cli` reads and
 writes them.
 
 ## Directory layout
@@ -16,11 +16,11 @@ $TIMEWARRIORDB/
     ├── 2025-02.data
     ├── …
     ├── tags.data          tag -> number of intervals using it
-    └── undo.data          Timewarrior's undo journal (not used by timew-rs)
+    └── undo.data          Timewarrior's undo journal (not used by timew-cli)
 ```
 
 Without `$TIMEWARRIORDB`, the configuration and the data can be in
-different places; see [timew-rs.md](timew-rs.md#database-and-configuration).
+different places; see [timew-cli.md](timew-cli.md#database-and-configuration).
 
 - One file per month, named `YYYY-MM.data`. Only names of exactly this form
   are read, and a missing `data/` directory counts as an empty database.
@@ -75,7 +75,7 @@ position, never a permanent identity.
 If exclusions are configured and the running interval spans excluded
 time, it counts as several intervals (one per piece) for numbering.
 
-`timew-rs export` writes the ID of each interval into its JSON at the time
+`timew-cli export` writes the ID of each interval into its JSON at the time
 of the export.
 
 ## `tags.data`
@@ -95,18 +95,18 @@ Entries are sorted by tag:
   is written as `{\n}`.
 - A tag that wasn't in the file before is announced as
   `Note: 'tag' is a new tag.`
-- If the file is missing or can't be parsed, `timew-rs` rebuilds it from
+- If the file is missing or can't be parsed, `timew-cli` rebuilds it from
   the intervals (and says so: `Tags database does not exist. Recreating
   from interval data...`). `timew-tui` only writes it when it saves an edit.
-- `timew-rs get dom.tags…` reads the tags from this file. `timew-rs tags`,
+- `timew-cli get dom.tags…` reads the tags from this file. `timew-cli tags`,
   `dom.tracked.tags…` and the TUI's tag list collect the tags from the
   intervals themselves.
 
 ## `undo.data`
 
-Timewarrior keeps an undo journal in `data/undo.data`. `timew-rs` and
+Timewarrior keeps an undo journal in `data/undo.data`. `timew-cli` and
 `timew-tui` neither write nor read it, and leave an existing file alone.
-(So after changes made with `timew-rs`, `timew undo` would revert an older
+(So after changes made with `timew-cli`, `timew undo` would revert an older
 Timewarrior change instead.)
 
 ## `timewarrior.cfg`
@@ -129,8 +129,8 @@ define tags:
   `tags.meeting.color = black on yellow` above. Block types are `tags`,
   `reports`, `theme`, `holidays` and `exclusions`. Values in blocks may be
   quoted.
-- `timew-rs config <name> <value>` changes the line `name = …` or appends
-  a new one; `timew-rs config <name>` removes it.
+- `timew-cli config <name> <value>` changes the line `name = …` or appends
+  a new one; `timew-cli config <name>` removes it.
 
 ## Time zones
 

@@ -1,6 +1,6 @@
-# timew-rs command reference
+# timew-cli command reference
 
-`timew-rs` is a replacement for the `timew` command. It implements all of
+`timew-cli` is a replacement for the `timew` command. It implements all of
 Timewarrior's commands except `undo`, reads and writes the same files
 (except the undo journal), and its output matches `timew` (Timewarrior
 1.10). It passes Timewarrior's own test suite, apart from the `undo`
@@ -8,7 +8,7 @@ tests. The places where it deliberately behaves differently are listed in
 [Differences from Timewarrior](#differences-from-timewarrior).
 
 ```
-timew-rs [<command>] [<range>] [<tag> ...] [@<id> ...] [:<hint> ...] [rc.<name>=<value> ...]
+timew-cli [<command>] [<range>] [<tag> ...] [@<id> ...] [:<hint> ...] [rc.<name>=<value> ...]
 ```
 
 Without a command it shows the running interval. It exits with 1 if
@@ -239,7 +239,7 @@ An executable in the `extensions` directory is a report named after its
 file (an unambiguous prefix works). It gets the configuration as
 `name: value` lines (including `temp.report.start`, `temp.report.end`,
 `temp.report.tags`, `temp.version`), an empty line, and the intervals as
-JSON on stdin, and prints the report. `timew-rs extensions` lists them.
+JSON on stdin, and prints the report. `timew-cli extensions` lists them.
 
 ## Configuration commands
 
@@ -251,7 +251,7 @@ JSON on stdin, and prints the report. `timew-rs extensions` lists them.
 | `config <name>` | Remove the setting from the file. |
 | `extensions` | List extension reports. |
 | `diagnostics` | Version, files and settings, for bug reports. |
-| `help [<command> \| dates \| dom \| durations \| hints \| ranges]` | Usage; `timew-rs <command> --help` is the same as `help <command>`. Shows Timewarrior's man page if it is installed. |
+| `help [<command> \| dates \| dom \| durations \| hints \| ranges]` | Usage; `timew-cli <command> --help` is the same as `help <command>`. Shows Timewarrior's man page if it is installed. |
 | `--version` | The version. |
 
 ## Differences from Timewarrior

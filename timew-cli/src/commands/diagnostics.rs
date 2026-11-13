@@ -33,7 +33,7 @@ fn describe(path: &Path) -> String {
 }
 
 pub fn run(s: &mut Session) -> Result<i32, String> {
-    let mut out = format!("\ntimew-rs {}\n       Platform: {} {}\n\n", crate::VERSION, std::env::consts::OS, std::env::consts::ARCH);
+    let mut out = format!("\ntimew-cli {}\n       Platform: {} {}\n\n", crate::VERSION, std::env::consts::OS, std::env::consts::ARCH);
     out.push_str("Configuration\n");
     out.push_str(&format!(
         "  TIMEWARRIORDB: {}\n",

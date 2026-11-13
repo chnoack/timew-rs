@@ -22,7 +22,7 @@ If the chosen directory has no `data/` subdirectory, it exits with
 Every load reads the files again, so `r` shows changes made by `timew`
 while the TUI is running. The only writes are saved edits (see
 [Editing an entry](#editing-an-entry)). The configuration
-(`timewarrior.cfg`) is read from the same place `timew-rs` reads it.
+(`timewarrior.cfg`) is read from the same place `timew-cli` reads it.
 
 ## The screen
 
@@ -52,7 +52,7 @@ while the TUI is running. The only writes are saved edits (see
   Seconds are cut off, not rounded.
 - **Totals** (the Total column, the status line's total and average) are
   **decimal hours** with two places: 7:30 is shown as `7.50`, 8:25 as
-  `8.42`. `timew-rs summary` still shows `H:MM:SS` everywhere, because its
+  `8.42`. `timew-cli summary` still shows `H:MM:SS` everywhere, because its
   output matches `timew`.
 - **Help line:** shows as many keys as fit the window width, and always ends
   with `q quit`. If some keys don't fit, it starts with `? help`, so the
@@ -114,18 +114,18 @@ table):
   space in double quotes (`"client a" meetings`). Typing inserts at the
   cursor; a long line scrolls sideways. `↑` from the start date or
   `Shift+Tab` gets there; an empty field removes all tags. New tags are
-  added to `tags.data` like with `timew-rs tag`.
+  added to `tags.data` like with `timew-cli tag`.
 - **Annotation** is a plain text field too (`↑` from the start date gets
   there). Any text is fine, including quotes; leading and trailing spaces
   are dropped, and an empty field removes the annotation.
 - The duration updates while you type.
-- `Enter` saves. The change is made the way `timew-rs modify` makes it: an
+- `Enter` saves. The change is made the way `timew-cli modify` makes it: an
   end before the start, or an overlap with another entry, is refused with
   a message in the form (which stays open). Otherwise the change is
   written, the entry stays selected, and the status line confirms the
   save.
 - **`Shift+Enter`** saves even if the entry now overlaps others, and
-  adjusts them like `timew-rs modify … :adjust`: an entry it overlaps at
+  adjusts them like `timew-cli modify … :adjust`: an entry it overlaps at
   one end is shortened, one it covers completely is deleted, one it lies
   inside is split around it. The status line says how many were adjusted,
   and an undo reverts all of it at once.
@@ -277,7 +277,7 @@ A view is a **period** combined with an optional **tag**.
 | `2025-03-01` | `2025-03-31` | The whole of March (**To is inclusive** for plain dates) |
 | `2025-03-05 08:30` | `2025-03-05T12:00` | Exact times: a space or `T`, and seconds are optional |
 | `2025-03-01` | *(empty)* | From 03-01 with no end (shown as "since 2025-03-01") |
-| `:lastyear`, `:week`, … | *(empty)* | Any [range hint](timew-rs.md#range-hints) |
+| `:lastyear`, `:week`, … | *(empty)* | Any [range hint](timew-cli.md#range-hints) |
 
 Invalid input shows a red error in the form, which stays open.
 
@@ -323,7 +323,7 @@ is open does it reach the main view. `Ctrl+C` is handled before all of
 them.
 
 Saving an edit calls `timew_rs::modify_interval(paths, original, edited, adjust)`.
-It opens the configuration and the database like `timew-rs` does, checks
+It opens the configuration and the database like `timew-cli` does, checks
 that the entry is still stored unchanged (otherwise it asks for a reload
 with `r`), deletes it, checks the edited one for overlaps with
 `validate::auto_adjust`, adds it and commits. If anything fails, nothing

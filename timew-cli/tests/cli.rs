@@ -1,6 +1,6 @@
-//! End-to-end tests of the `timew-rs` binary in throwaway databases. The
+//! End-to-end tests of the `timew-cli` binary in throwaway databases. The
 //! expected outputs were captured from the original `timew` (1.10.0-dev)
-//! with `TZ=Europe/Berlin` and an 80 column terminal. (`timew-rs` has no
+//! with `TZ=Europe/Berlin` and an 80 column terminal. (`timew-cli` has no
 //! `undo` and writes no `undo.data`.)
 
 use std::fs;
@@ -25,7 +25,7 @@ impl Db {
 
     /// Run with the given arguments; returns (status, stdout, stderr).
     fn run(&self, args: &[&str]) -> (i32, String, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_timew-rs"))
+        let out = Command::new(env!("CARGO_BIN_EXE_timew-cli"))
             .args(args)
             .env("TIMEWARRIORDB", &self.dir)
             .env("TZ", "Europe/Berlin")

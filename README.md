@@ -4,7 +4,7 @@ A Rust implementation of [Timewarrior](https://timewarrior.net/) that uses
 the same database format, plus **timew-tui**, a terminal UI for browsing
 that data and correcting start and end times.
 
-> **Status:** `timew-rs` implements all of Timewarrior's commands: tracking
+> **Status:** `timew-cli` implements all of Timewarrior's commands: tracking
 > (`start`, `stop`, `track`, `continue`, …), editing (`modify`, `move`,
 > `tag`, `join`, `split`, …), the reports (`summary`, `day`,
 > `week`, `month`, `gaps`, …), extensions and configuration, except
@@ -54,7 +54,7 @@ that data and correcting start and end times.
 
 | Path | What it is |
 | --- | --- |
-| `src/` | The `timew-rs` crate: the data model and commands (a library), plus the `timew-rs` CLI |
+| `timew-cli/` | The `timew-rs` crate: the data model and commands (the `timew_rs` library), plus the `timew-cli` command |
 | `timew-tui/` | The `timew-tui` crate: the terminal UI, built on the library |
 | `examples/` | A generator for example data, plus two years of generated data |
 | `docs/` | Technical documentation (see below) |
@@ -64,15 +64,15 @@ that data and correcting start and end times.
 You need a Rust toolchain that supports edition 2024 (Rust 1.85 or later).
 
 ```sh
-cargo build --release --workspace     # builds both programs
-cargo test --workspace                # runs all tests
+cargo build --release     # builds both programs
+cargo test                # runs all tests
 ```
 
-The programs are written to `target/release/timew-rs` and
+The programs are written to `target/release/timew-cli` and
 `target/release/timew-tui`. To install them into `~/.cargo/bin`:
 
 ```sh
-cargo install --path .           # timew-rs
+cargo install --path timew-cli   # timew-cli
 cargo install --path timew-tui   # timew-tui
 ```
 
@@ -85,12 +85,12 @@ The repository includes a year of generated project-manager data
 ```sh
 export TIMEWARRIORDB=$PWD/examples/pm-2025
 
-# timew-rs
-./target/release/timew-rs summary 2025-03-03 - 2025-03-08
-./target/release/timew-rs week 2025-03-03
-./target/release/timew-rs export 2025-03-03 - 2025-03-04 meetings
-./target/release/timew-rs get dom.tracked.count dom.tags.count
-./target/release/timew-rs tags :lastyear
+# timew-cli
+./target/release/timew-cli summary 2025-03-03 - 2025-03-08
+./target/release/timew-cli week 2025-03-03
+./target/release/timew-cli export 2025-03-03 - 2025-03-04 meetings
+./target/release/timew-cli get dom.tracked.count dom.tags.count
+./target/release/timew-cli tags :lastyear
 
 # timew-tui
 ./target/release/timew-tui
@@ -99,21 +99,21 @@ export TIMEWARRIORDB=$PWD/examples/pm-2025
 The data is from 2025, so the TUI's default view (the current month) is empty.
 Press Shift+4 and pick 2025, or press `c` and enter `:lastyear`.
 
-## timew-rs (command line)
+## timew-cli (command line)
 
-`timew-rs` behaves like the `timew` command: same commands, same output,
+`timew-cli` behaves like the `timew` command: same commands, same output,
 same files. It was compared against the real `timew` byte for byte, and it
 passes Timewarrior's own test suite (apart from the `undo` tests: there is
 no `undo` command and no undo journal).
 
 ```sh
-timew-rs start meetings client-a          # start tracking now
-timew-rs stop                             # stop
-timew-rs track 9am - 10:30 email          # record a past interval
-timew-rs summary :week                    # this week's table
-timew-rs week                             # this week's chart
-timew-rs tag @2 budget                    # add a tag to the 2nd most recent
-timew-rs modify end @1 16:45              # fix an end time
+timew-cli start meetings client-a          # start tracking now
+timew-cli stop                             # stop
+timew-cli track 9am - 10:30 email          # record a past interval
+timew-cli summary :week                    # this week's table
+timew-cli week                             # this week's chart
+timew-cli tag @2 budget                    # add a tag to the 2nd most recent
+timew-cli modify end @1 16:45              # fix an end time
 ```
 
 | Group | Commands |
@@ -129,7 +129,7 @@ Dates can be ISO (`2025-03-01T08:00`), informal (`8am`, `yesterday`,
 and tag colors work as in Timewarrior (there is no `undo`; see below). The database is
 found the same way (`$TIMEWARRIORDB`, `~/.timewarrior`, or the XDG
 directories). Full reference, including the few deliberate differences:
-[docs/timew-rs.md](docs/timew-rs.md).
+[docs/timew-cli.md](docs/timew-cli.md).
 
 ## timew-tui (terminal UI)
 
@@ -159,7 +159,7 @@ Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/t
 | Document | Contents |
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | Crate and module layout, data flow, the invariants the code relies on, the test approach |
-| [docs/timew-rs.md](docs/timew-rs.md) | CLI reference: commands, dates, ranges, hints, configuration, differences from Timewarrior |
+| [docs/timew-cli.md](docs/timew-cli.md) | CLI reference: commands, dates, ranges, hints, configuration, differences from Timewarrior |
 | [docs/timew-tui.md](docs/timew-tui.md) | TUI user guide (keys, filters, layouts) and how it is built internally |
 | [docs/data-format.md](docs/data-format.md) | The on-disk format: directory layout, `.data` lines, `tags.data`, `timewarrior.cfg`, IDs |
 | [docs/example-data.md](docs/example-data.md) | The example data generator and the included data sets |
@@ -169,9 +169,9 @@ Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/t
 This is a clean-room reimplementation. The behavior was worked out by reading
 the Timewarrior C++ source (GothenburgBitFactory/timewarrior, `develop`
 branch, commit `3699d2e`) and its tests, and by comparing against the real
-`timew` binary. The tests in `tests/cli.rs` contain output captured from
-`timew`, and `timew-rs` passes Timewarrior's Python test suite (except
+`timew` binary. The tests in `timew-cli/tests/cli.rs` contain output captured from
+`timew`, and `timew-cli` passes Timewarrior's Python test suite (except
 for `undo`). The two
-programs share the same files, so `timew-rs` and `timew-tui` can be used on
+programs share the same files, so `timew-cli` and `timew-tui` can be used on
 an existing Timewarrior database, and Timewarrior can keep using a database
-that `timew-rs` wrote to.
+that `timew-cli` wrote to.
