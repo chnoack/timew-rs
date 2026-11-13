@@ -1,91 +1,191 @@
 # timew-rs command reference
 
-`timew-rs` is a drop-in replacement for the `timew` command, limited to the
-read-only commands. Its output matches `timew` for the cases covered by the
-tests.
+`timew-rs` is a replacement for the `timew` command. It implements all of
+Timewarrior's commands, reads and writes the same files, and its output
+matches `timew` (Timewarrior 1.10). It passes Timewarrior's own test
+suite. The places where it deliberately behaves differently are listed in
+[Differences from Timewarrior](#differences-from-timewarrior).
 
 ```
-timew-rs <command> [<range>] [<tags>…] [@<id>…]
+timew-rs [<command>] [<range>] [<tag> ...] [@<id> ...] [:<hint> ...] [rc.<name>=<value> ...]
 ```
 
-## Database
+Without a command it shows the running interval. It exits with 1 if
+nothing is being tracked.
 
-`timew-rs` reads `$TIMEWARRIORDB/data/`. The variable **must** be set; there
-is no fallback to the standard location yet:
+## Database and configuration
 
-```sh
-export TIMEWARRIORDB=~/.local/share/timewarrior
+| What | Where |
+| --- | --- |
+| Configuration, extensions | `$TIMEWARRIORDB`, else `~/.timewarrior` if it exists, else `$XDG_CONFIG_HOME/timewarrior` (`~/.config/timewarrior`) |
+| Data | `$TIMEWARRIORDB`, else `~/.timewarrior` if it exists, else `$XDG_DATA_HOME/timewarrior` (`~/.local/share/timewarrior`) |
+
+On the first run the directories are created (after asking, unless
+`:yes` is given or `confirmation = off`), plus `data/`, `extensions/` and
+a `timewarrior.cfg` containing:
+
+```
+reports.summary.ids = yes
+reports.summary.annotations = yes
 ```
 
-(`timew-tui` does fall back to the standard location; see
-[timew-tui.md](timew-tui.md).)
+The file formats are described in [data-format.md](data-format.md).
+`rc.<name>=<value>` (or `rc.<name>:<value>`) overrides a setting for one
+run.
 
 ## Arguments
 
-The arguments are classified like this:
+Each argument is one of:
 
-| Token | Meaning |
+| Argument | Meaning |
 | --- | --- |
+| The first command word | The command. An unambiguous prefix works too (`sum` is `summary`), and so does the name of an extension report. |
 | `@N` (N ≥ 1) | An interval ID. `@1` is the most recent interval. `@0` is an error. |
-| `:name` | A hint, for example a range hint such as `:week` |
-| First other word | The command |
-| `YYYY-MM-DD[THH:MM:SS[Z]]`, `-`, `to` | A date range (see below) |
+| `:name` | A hint (an unambiguous prefix works too, e.g. `:adj`) |
+| `rc.name=value` | A configuration override |
+| A date or a duration | Part of the range |
+| `from`, `since`, `to`, `until`, `-`, `for`, `before`, `after`, `ago` | Range keywords |
+| `dom.…` | A DOM reference (`get`) |
 | Anything else | A tag |
+
+### Dates
+
+| Form | Examples |
+| --- | --- |
+| ISO 8601 | `2025-03-01`, `2025-03-01T08:00`, `2025-03-01T08:00:00`, `2025-03-01T07:00:00Z`, `2025-03-01T08:00+01:00`, `20250301T070000Z`, `2025-03`, `2025-W10`, `2025-W10-3`, `2025-060` |
+| Times (today) | `08:00`, `08:00:00`, `0800`, `08:00Z` |
+| Informal times (today) | `8am`, `8:30pm`, `12p`, `9:15` |
+| Epoch seconds | `1740812400` |
+| Days | `now`, `today`, `yesterday`, `tomorrow` (`yest` and other 3+ letter abbreviations work), `monday` … `sunday`, `mon` …, `1st` … `31st` |
+| Periods | `sod`, `eod`, `sow`, `eow`, `som`, `eom`, `soq`, `eoq`, `soy`, `eoy` (start and end of day, week, month, quarter, year), with `p`/`n` for the previous/next one (`sopd`, `eonw`, …), work weeks `soww`, `eoww` (also `sopww`, `eonww`, …), month names `january` … `december` |
+| Holidays | `easter`, `eastermonday`, `goodfriday`, `ascension`, `pentecost`, `midsommar`, `midsommarafton`, `juhannus`; `later`, `someday` |
+
+Dates without `Z` or an offset are local time. Times and day names refer
+to today or the most recent such day, never the future. Weeks start on
+Monday and are numbered per ISO 8601. The `eo…` names are the **end** of
+the period, i.e. midnight after it.
+
+### Durations
+
+`90s`, `30min`, `1.5h`, `2 hours`, `3d`, `1w`, `PT1H30M`, `P1D`, `P2W`, a
+unit on its own (`hour`, `day`, `week`), or a number of seconds greater
+than 60. Note that `m` means months, so write `min` for minutes.
 
 ### Ranges
 
 | Form | Range |
 | --- | --- |
-| `2025-03-01` | From that date (local midnight) onward, with no end |
-| `2025-03-01 - 2025-03-08` | From 03-01 00:00 **up to, but not including,** 03-08 00:00 |
-| `2025-03-01 to 2025-03-08` | The same |
-| `2025-03-01T08:00:00 - 2025-03-01T12:00:00` | Exact local times |
-| `…T08:00:00Z` | A UTC time |
-| `20250301T080000Z` | The compact internal format (UTC) |
+| `<date>` | A date alone is its whole day, week or month (`2025-03-01`, `2025-W10`, `2025-03`, `yesterday`, `monday`, `march`). A date with a time, or an instant like `now`, starts an open range. |
+| `from <date>` | From then on |
+| `[from] <date> to\|- <date>` | Between the two (the end is excluded) |
+| `[from] <date> for <duration>` | From the date for that long |
+| `<duration> before\|after <date>` | The duration before or after the date |
+| `<duration> ago` | From that long ago on |
+| `[for] <duration>` | The last `<duration>` up to now |
+| `:hint` | A range hint |
 
-Dates without a `Z` are local time. Timewarrior's informal date words ("next
-monday", "eom", …) are **not** supported.
+### Hints
 
-### Range hints
-
-| Hint | Range (local time) |
+| Hint | Meaning |
 | --- | --- |
-| `:day`, `:today` | Today |
-| `:yesterday` | Yesterday |
-| `:monday` … `:sunday` | The most recent day with that name |
-| `:week`, `:lastweek` | This or last week (Monday to Sunday) |
-| `:fortnight` | Last week plus this week |
-| `:month`, `:lastmonth` | This or last calendar month |
-| `:quarter`, `:lastquarter` | This or last calendar quarter |
-| `:year`, `:lastyear` | This or last calendar year |
-| `:all` | Everything |
-
-A hint takes priority over dates if both are given.
-
-### Tags
-
-Every tag you give must be present on an interval for it to match:
-`timew-rs export meetings budget` lists only intervals tagged with both.
+| `:day`, `:today`, `:yesterday` | Today, yesterday |
+| `:week`, `:lastweek`, `:fortnight` | This week, last week, both |
+| `:month`, `:lastmonth`, `:quarter`, `:lastquarter`, `:year`, `:lastyear` | Calendar periods |
+| `:monday` … `:sunday` | The most recent such day |
+| `:all` | All time |
+| `:adjust` | Resolve overlaps by shortening, splitting or removing existing intervals |
+| `:fill` | Extend to the neighboring intervals |
+| `:quiet` | No feedback (`verbose = off`) |
+| `:yes` | Don't ask (`confirmation = off`) |
+| `:color`, `:nocolor` | Force colors on/off (by default on for a terminal) |
+| `:ids`, `:no-ids`, `:tags`, `:no-tags`, `:annotations`, `:no-annotations`, `:holidays`, `:no-holidays` | Summary columns |
+| `:blank` | Charts and gaps without the tracked intervals |
+| `:debug` | Accepted, but prints nothing extra |
 
 ### IDs
 
 IDs are assigned when the data is read, never stored: `@1` is the most
 recent interval, `@2` the one before, and so on. Adding or removing an
-interval changes the IDs of all older ones. You cannot combine IDs with tags
-or a range (that is an error, as in `timew`).
+interval changes the IDs of all older ones.
 
-## Commands
+When exclusions are configured and the running interval spans excluded
+time, it is shown as several pieces, the newest being `@1`. Commands that
+change intervals first store these pieces as separate intervals.
 
-### `summary`
+### Overlaps
 
-```sh
-timew-rs summary                      # today (the default range is :day)
-timew-rs summary :week
-timew-rs summary 2025-03-03 - 2025-03-08 meetings
-timew-rs summary @3 @4
+Intervals may not overlap. A command that would create an overlap fails
+with "You cannot overlap intervals…", unless `:adjust` is given: then the
+new or changed interval wins, and the intervals it overlaps are shortened,
+split or deleted. Starting an interval while another one runs is not an
+overlap: the running one is stopped. Starting one with the same tags as
+the running one does nothing.
+
+### Exclusions and holidays
+
+```
+exclusions.monday = <8:00 12:00-12:45 >17:30   # before 8, lunch, after 17:30
+exclusions.days.2025_12_24 = off               # an extra day off
+exclusions.days.2025_12_27 = on                # a working day despite a holiday
+holidays.de-DE.2025_12_25 = 1. Weihnachtstag
 ```
 
-Prints the same table as `timew summary`:
+`track` leaves excluded time that lies inside the range out of the
+interval (it is split around it). Charts show excluded time in gray, and
+`gaps` doesn't report it.
+
+## Commands that record time
+
+| Command | Does |
+| --- | --- |
+| `start [<date>] [<tag> ...]` | Start tracking (now or at a past `<date>`); stops the running interval. `:fill` starts at the end of the previous interval. |
+| `stop [<date>] [<tag> ...]` | Stop tracking. With tags, only those stop and tracking continues with the others. |
+| `track <range> [<tag> ...]` | Record a closed interval; without an end, like `start`. `:fill` extends it to its neighbors. |
+| `continue [@<id> \| <tag> ...] [<date> \| <range>]` | Track again with the tags and annotation of the last interval, of `@<id>`, or of the last one with all the tags. |
+| `cancel` | Discard the running interval. |
+
+## Commands that change intervals
+
+Without IDs, `annotate`, `tag`, `untag` and `retag` work on the running
+interval.
+
+| Command | Does |
+| --- | --- |
+| `annotate [@<id> ...] <text>` | Set the annotation (all the words after the IDs); with no text, remove it. |
+| `tag [@<id> ...] <tag> ...` | Add tags. |
+| `untag [@<id> ...] <tag> ...` | Remove tags. |
+| `retag [@<id> ...] <tag> ...` | Replace all tags. |
+| `delete @<id> ...` | Delete intervals. |
+| `modify start @<id> <date>` | Change the start (`:fill`: to the end of the previous interval). |
+| `modify end @<id> <date>` | Change the end (`:fill`: to the start of the next interval). |
+| `modify range @<id> <range>` | Change both. |
+| `move @<id> <date>` | Move to start at `<date>`, keeping the length. |
+| `lengthen @<id> ... <duration>` | Move the end later. |
+| `shorten @<id> ... <duration>` | Move the end earlier. |
+| `resize @<id> ... <duration>` | Set the length. |
+| `split @<id> ...` | Split into two halves. |
+| `join @<id> @<id>` | Merge two intervals, with the tags of both. |
+| `fill [@<id>]` | Extend to the neighboring intervals. |
+| `undo` | Revert the last command that changed something (intervals or configuration). |
+| `import [<file> ...]` | Add intervals from JSON (the `export` format), from files or stdin. |
+
+## Reports
+
+| Command | Default range | Shows |
+| --- | --- | --- |
+| `summary` | `:day` | A table per interval and day with daily and total times |
+| `day`, `week`, `month` | `:day`, `:week`, `:month` | A chart, one line per day and a cell per hour |
+| `gaps` | `:day` | Untracked time, leaving out excluded time |
+| `tags` | all | The tags used, with `tags.<tag>.description` |
+| `export` | all | JSON, one interval per line |
+| `get <dom> ...` | all | Values, space-separated (see below) |
+| `[report] <name>` | all | An extension report |
+
+The default ranges can be changed with `reports.<name>.range` (and
+`reports.range` for all). Reports take a range and tags, or IDs (not
+both).
+
+### `summary`
 
 ```
 Wk  Date       Day ID    Tags                             Annotation    Start      End    Time   Total
@@ -93,95 +193,96 @@ Wk  Date       Day ID    Tags                             Annotation    Start   
 W10 2025-03-03 Mon @2047 budget                                       8:50:00  9:20:00 0:30:00
                    @2046 stakeholders                                 9:20:00 10:20:00 1:00:00
                    @2045 meetings                                    10:20:00 11:20:00 1:00:00
-                   @2044 email, risks                                11:20:00 12:25:00 1:05:00
-                   @2043 meetings, planning, stakeholders            12:55:00 14:55:00 2:00:00
 …
 ```
 
-- Week numbers are ISO 8601. Week, date and day appear only on the first
-  row of each day.
-- An interval that runs past midnight gets one row per day.
-- A still-running interval shows `-` as its end, and its time counts up to
-  now.
-- The day's total is on its last row, and the grand total is at the bottom.
-- The ID and Annotation columns are always shown. Timewarrior's installer
-  turns them on in every new `timewarrior.cfg`, and `timew-rs` has no
-  configuration file.
-- If nothing matches, it prints
-  `No filtered data found in the range <start> - <end>[ tagged with …].`
+Columns: `reports.summary.weeks`, `.weekdays`, `.tags` (on by default),
+`.ids`, `.annotations` (off by default, on in a new configuration file),
+and the hints above. An interval that runs past midnight gets one row per
+day; a running one counts up to now. Holidays in the range are listed
+below. The table fits itself to the terminal width, wrapping long cells.
 
-### `export`
+### `day`, `week`, `month`
 
-```sh
-timew-rs export                       # everything
-timew-rs export :lastmonth meetings
-timew-rs export @1
-```
+Settings `reports.<day|week|month>.<name>`:
 
-JSON, one object per line, oldest first:
+| Name | Values (default for day / week / month) |
+| --- | --- |
+| `hours` | `all` (0-23) or `auto` (only the hours with data) |
+| `cell` | Minutes per character (15) |
+| `lines` | Lines per day (2 / 1 / 1) |
+| `spacing` | Blank columns between hours (1) |
+| `axis` | `internal` puts the hours into the chart (day), otherwise a header line |
+| `month`, `week`, `weekday`, `day` | Labels at the start of each line |
+| `totals`, `summary`, `holidays` | Daily totals, the summary below, the holiday list |
 
-```json
-[
-{"id":2045,"start":"20250303T092000Z","end":"20250303T102000Z","tags":["meetings"]},
-{"id":2043,"start":"20250303T115500Z","end":"20250303T135500Z","tags":["meetings","planning","stakeholders"]},
-{"id":2041,"start":"20250303T144000Z","end":"20250303T145500Z","tags":["meetings"]}
-]
-```
-
-Times are in UTC. `end` is missing for a running interval. `tags` (sorted
-alphabetically) and `annotation` appear only if the interval has any.
-
-### `tags`
-
-```sh
-timew-rs tags                         # every tag in the database
-timew-rs tags :year
-timew-rs tags :year meetings          # tags used together with "meetings"
-```
-
-```
-Tag          Description
------------- -----------
-budget       -
-email        -
-```
-
-The description is always `-`, since there is no configuration file. With
-no matches it prints `No data found.`, or nothing if `:quiet` is given.
+`:ids` adds the IDs to the labels; `:blank` leaves out the intervals.
 
 ### `get`
-
-```sh
-timew-rs get dom.tracked.count dom.tags.count dom.active
-```
-
-Prints the values of one or more DOM references on one line, separated by
-spaces. An unknown reference is an error that names it.
 
 | Reference | Value |
 | --- | --- |
 | `dom.active` | `1` if an interval is running, else `0` |
-| `dom.active.start` / `.end` / `.duration` / `.json` | Fields of the running interval |
-| `dom.active.tags`, `.tags.count`, `.tags.<N>` | Its tags |
-| `dom.tracked.count` | The number of intervals |
-| `dom.tracked.ids` | All IDs, for example `@3 @2 @1 ` |
-| `dom.tracked.tags`, `.tags.count`, `.tags.<N>` | Tags across all intervals |
-| `dom.tracked.<N>.start` / `.end` / `.duration` / `.json` | The N-th most recent interval (`1` = the newest) |
-| `dom.tracked.<N>.tags`, `.tags.count`, `.tags.<N>` | Its tags |
-| `dom.tags`, `dom.tags.count`, `dom.tags.<N>` | Every tag in the database |
-| `dom.tag.<N>`, `dom.tag.count` | An older alias for `dom.tags.*` |
+| `dom.active.start`, `.duration`, `.json`, `.tags`, `.tags.count`, `.tags.<N>` | The running interval |
+| `dom.tracked.count`, `dom.tracked.ids` | The intervals in the range (and with the tags) given |
+| `dom.tracked.tags`, `.tags.count`, `.tags.<N>` | Their tags |
+| `dom.tracked.<N>.start`, `.end`, `.duration`, `.json`, `.tags…` | The N-th most recent of them |
+| `dom.tags`, `dom.tags.count`, `dom.tags.<N>` | All tags in `tags.data` |
+| `dom.rc.<name>` | A configuration value (empty if unset) |
 
-Start and end are local time (`2025-03-03T08:50:00`). Durations use ISO 8601
-format (`PT1H30M`, `P2DT3H`, and `PT0S` for zero). Tag lists are sorted
-alphabetically, and `<N>` counts from 1.
+Times are local (`2025-03-03T08:50:00`), durations ISO 8601 (`PT1H30M`).
+`.tag.` instead of `.tags.` still works but prints a deprecation warning.
 
-## Not implemented (yet)
+### Extension reports
 
-- Commands that change data: `track`, `start`, `stop`, `continue`,
-  `modify`, `tag`, `untag`, `annotate`, `delete`, `cancel`, `undo`
-  (`timew-rs track` prints `'track' is not a timew-rs command yet.`).
-- The configuration file (`timewarrior.cfg`): no holidays, exclusions,
-  colors, tag descriptions or `reports.*` settings.
-- `dom.rc.*`, Timewarrior's informal date words, and other reports (`day`,
-  `week`, `month`, `gaps`, …).
-- Shortening the summary table to fit the terminal width.
+An executable in the `extensions` directory is a report named after its
+file (an unambiguous prefix works). It gets the configuration as
+`name: value` lines (including `temp.report.start`, `temp.report.end`,
+`temp.report.tags`, `temp.version`), an empty line, and the intervals as
+JSON on stdin, and prints the report. `timew-rs extensions` lists them.
+
+## Configuration commands
+
+| Command | Does |
+| --- | --- |
+| `config` / `show` | Show all settings, grouped like rule blocks. |
+| `config <name> <value>` | Set a value (asks first unless `:yes`). Exits with 1 if nothing changed. |
+| `config <name> ''` | Set an empty value. |
+| `config <name>` | Remove the setting from the file. |
+| `extensions` | List extension reports. |
+| `diagnostics` | Version, files and settings, for bug reports. |
+| `help [<command> \| dates \| dom \| durations \| hints \| ranges]` | Usage; `timew-rs <command> --help` is the same as `help <command>`. Shows Timewarrior's man page if it is installed. |
+| `--version` | The version. |
+
+## Differences from Timewarrior
+
+These are deliberate; most fix something the original gets wrong.
+
+- `annotate` uses all words after the IDs as the annotation (Timewarrior
+  uses only the last word).
+- A date alone as a range: `2025-03` is the whole month and `2025-W10` the
+  whole week (Timewarrior: only the first day), and days are calendar
+  days, so a day with a daylight saving change has 23 or 25 hours
+  (Timewarrior: always 24 hours, spilling into the next day).
+- `eod`, `eow`, `eom`, … are midnight after the period (Timewarrior:
+  23:59:59 in some places, midnight in others).
+- Report names are only recognized as the command word. Timewarrior also
+  takes a later word that is a prefix of a report name, such as `d` for
+  `day`, as the report and drops it from the tags.
+- Without colors (output not to a terminal), `gaps` and the chart totals
+  contain no color codes.
+- `exclusions.days.<date> = on|off` works as documented (Timewarrior
+  treats both as days off).
+- `undo` reverts the actions of a command in reverse order, which also
+  works after a running interval was split at exclusions, and skips
+  commands that changed nothing. Undoing a configuration change restores
+  the line exactly.
+- `config <name>` removes the line instead of leaving it blank; values are
+  written as given.
+- `lengthen`, `shorten` and `resize` require a duration, and `move` a date
+  (Timewarrior uses 0 or fails later).
+- `since` and `until` work like `from` and `to`.
+- `dom.rc.<name>` of an unset name is empty instead of an error.
+- `help <command>` without installed man pages shows the command's usage.
+- Backslashes in annotations are kept.
+- `:debug` produces no debug output.

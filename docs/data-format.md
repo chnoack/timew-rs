@@ -1,26 +1,31 @@
 # Database format
 
-`timew-rs` and `timew-tui` read the same files as Timewarrior, so they work
-on an existing Timewarrior database. This page describes the files as
-`timew-rs` understands them.
+`timew-rs` and `timew-tui` use the same files as Timewarrior, so they work
+on an existing Timewarrior database, and Timewarrior can read everything
+`timew-rs` writes. This page describes the files as `timew-rs` reads and
+writes them.
 
 ## Directory layout
 
 ```
 $TIMEWARRIORDB/
-├── timewarrior.cfg        configuration (ignored by timew-rs)
+├── timewarrior.cfg        configuration
+├── extensions/            extension reports (executables)
 └── data/
     ├── 2025-01.data       intervals that START in January 2025
     ├── 2025-02.data
     ├── …
-    ├── tags.data          tag -> usage count
-    └── undo.data          undo journal (not used yet)
+    ├── tags.data          tag -> number of intervals using it
+    └── undo.data          the undo journal
 ```
+
+Without `$TIMEWARRIORDB`, the configuration and the data can be in
+different places; see [timew-rs.md](timew-rs.md#database-and-configuration).
 
 - One file per month, named `YYYY-MM.data`. Only names of exactly this form
   are read, and a missing `data/` directory counts as an empty database.
-- An interval goes into the file of the month it **starts** in, even if it
-  ends in a later month.
+- An interval goes into the file of the month it **starts** in (in local
+  time), even if it ends in a later month.
 - File names sort lexicographically in chronological order. Reading the
   files in reverse, with the lines of each file also in reverse, gives the
   intervals newest first, which is how IDs are assigned (see below).
@@ -47,12 +52,17 @@ inc 20261112T090000Z # working
 | Timestamps | Always 16 characters, `YYYYMMDDTHHMMSSZ`, **in UTC**. The fixed length is how the parser recognizes a timestamp. |
 | `- <end>` | Missing for a running interval |
 | Tags | Separated by spaces, sorted, no duplicates. A tag is quoted (`"…"`) if it contains a space, `"`, or any of `-+/()<^!=~_%`. A `"` inside a tag is written as `\"`. |
-| Annotation | An optional second `#`, then a quoted text |
+| Annotation | An optional second `#`, then a quoted text (`#` alone stands in for the tags if there are none) |
 | Line order | Lines are sorted as plain strings when a file is written. Because of the fixed-width timestamp, string order is time order. |
 
-Files are written atomically: to a temporary file first, then renamed over
-the original. A file that would end up empty is deleted instead. These write
-paths exist in the library, but no command uses them yet.
+Before a line is added, it is parsed back and compared with the interval,
+so nothing is written that would read back differently. Files are written
+atomically: to a temporary file first, then renamed over the original. A
+file that would end up empty is deleted.
+
+Changes are only written when a command succeeds; a command that fails
+leaves all files as they were (except configuration changes, which are
+written immediately).
 
 ## IDs
 
@@ -61,6 +71,9 @@ the intervals are numbered newest first: `@1` is the most recent interval
 (the running one, if any), `@2` the one before, and so on. Adding or
 deleting an interval shifts the IDs of all older ones, so an ID is only a
 position, never a permanent identity.
+
+If exclusions are configured and the running interval spans excluded
+time, it counts as several intervals (one per piece) for numbering.
 
 `timew-rs export` writes the ID of each interval into its JSON at the time
 of the export.
@@ -77,17 +90,72 @@ Entries are sorted by tag:
 }
 ```
 
-- A tag whose count drops to 0 is removed rather than written as
-  `{"count":0}`. An empty database is written as `{\n}`.
-- A missing, empty or broken file is treated as empty, not as an error.
-- `timew-rs tags`, `timew-rs get dom.tags…` and the TUI's tag list
-  **don't** use this file. They collect the tags from the intervals
-  themselves, so the result is correct even if `tags.data` is out of date.
+- Every change to an interval updates the counts. A tag whose count drops
+  to 0 is removed rather than written as `{"count":0}`. An empty database
+  is written as `{\n}`.
+- A tag that wasn't in the file before is announced as
+  `Note: 'tag' is a new tag.`
+- If the file is missing or can't be parsed, `timew-rs` rebuilds it from
+  the intervals (and says so: `Tags database does not exist. Recreating
+  from interval data...`). `timew-tui` reads it but never writes it.
+- `timew-rs get dom.tags…` reads the tags from this file. `timew-rs tags`,
+  `dom.tracked.tags…` and the TUI's tag list collect the tags from the
+  intervals themselves.
+
+## `undo.data`
+
+One transaction per command that changed something, each with the
+actions it took:
+
+```
+txn:
+  type: interval
+  before: {"id":0,"start":"20250303T110000Z","tags":["x","y"]}
+  after: 
+  type: interval
+  before: 
+  after: {"id":0,"start":"20250303T110000Z","end":"20250303T113000Z","tags":["x","y"]}
+txn:
+  type: config
+  before: 
+  after: name = value
+```
+
+- An `interval` action holds the interval's JSON (as in `export`) before
+  and after; an empty side means the interval was added or deleted. A
+  change is a delete followed by an add.
+- A `config` action holds the configuration file line before and after.
+- `journal.size` sets how many transactions are kept: `-1` (default) keeps
+  all, `0` turns the journal off and removes the file.
+- `undo` removes the last transaction and reverts its actions, last first.
+
+## `timewarrior.cfg`
+
+```
+# comments start with '#'
+verbose = on
+reports.week.hours = auto
+import /usr/share/timewarrior/holidays/holidays.de-DE
+
+define tags:
+  meeting:
+    color = black on yellow
+    description = Meetings
+```
+
+- `name = value` settings; everything after `#` is a comment.
+- `import <absolute path>` reads another file (up to 10 levels deep).
+- `define <type>:` blocks nest settings by indentation:
+  `tags.meeting.color = black on yellow` above. Block types are `tags`,
+  `reports`, `theme`, `holidays` and `exclusions`. Values in blocks may be
+  quoted.
+- `timew-rs config <name> <value>` changes the line `name = …` or appends
+  a new one; `timew-rs config <name>` removes it.
 
 ## Time zones
 
 Everything on disk is in UTC. Everything shown to the user, and every range
-boundary (`:day`, `:month`, the summary's day rows, the TUI's month and year
-lists), uses the **system's local time zone** through `jiff`, so daylight
-saving time is handled correctly. Weeks start on Monday, and week numbers
-follow ISO 8601.
+boundary (`:day`, `:month`, the summary's day rows, the month a datafile is
+for, the TUI's month and year lists), uses the **system's local time zone**
+(or `$TZ`) through `jiff`, so daylight saving time is handled correctly.
+Weeks start on Monday, and week numbers follow ISO 8601.

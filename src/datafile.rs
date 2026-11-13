@@ -147,15 +147,15 @@ impl Datafile {
 /// rename it into place. A rename within the same directory/filesystem is
 /// atomic on POSIX systems, matching the durability intent of `AtomicFile`
 /// in the C++ source.
-fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
+/// Write `contents` to a temporary file next to `path`, then rename it over
+/// `path`, so readers never see a half-written file.
+pub fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let tmp_path = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("data")
-    ));
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp_path = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
 
     fs::write(&tmp_path, contents)?;
     fs::rename(&tmp_path, path)?;

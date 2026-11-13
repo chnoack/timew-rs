@@ -4,10 +4,11 @@ A Rust implementation of [Timewarrior](https://timewarrior.net/) that uses
 the same database format, plus **timew-tui**, a read-only terminal UI for
 browsing that data.
 
-> **Status:** the data model and all *read-only* commands work (`export`,
-> `get`, `summary`, `tags`). Commands that modify the database (`track`,
-> `start`, `stop`, `modify`, `undo`, …) are not implemented yet. Neither
-> program writes to your database.
+> **Status:** `timew-rs` implements all of Timewarrior's commands: tracking
+> (`start`, `stop`, `track`, `continue`, …), editing (`modify`, `move`,
+> `tag`, `join`, `split`, `undo`, …), the reports (`summary`, `day`,
+> `week`, `month`, `gaps`, …), extensions and configuration. It passes
+> Timewarrior's own test suite. `timew-tui` only reads.
 
 ```
  timew-tui   ./examples/pm-2025  (read-only)
@@ -85,6 +86,7 @@ export TIMEWARRIORDB=$PWD/examples/pm-2025
 
 # timew-rs
 ./target/release/timew-rs summary 2025-03-03 - 2025-03-08
+./target/release/timew-rs week 2025-03-03
 ./target/release/timew-rs export 2025-03-03 - 2025-03-04 meetings
 ./target/release/timew-rs get dom.tracked.count dom.tags.count
 ./target/release/timew-rs tags :lastyear
@@ -98,19 +100,35 @@ Press Shift+4 and pick 2025, or press `c` and enter `:lastyear`.
 
 ## timew-rs (command line)
 
-`timew-rs` behaves like the `timew` command for the commands it supports. It
-was compared against real `timew` output byte for byte.
+`timew-rs` behaves like the `timew` command: same commands, same output,
+same files. It was compared against the real `timew` byte for byte, and it
+passes Timewarrior's own test suite.
 
-| Command | Example |
+```sh
+timew-rs start meetings client-a          # start tracking now
+timew-rs stop                             # stop
+timew-rs track 9am - 10:30 email          # record a past interval
+timew-rs summary :week                    # this week's table
+timew-rs week                             # this week's chart
+timew-rs tag @2 budget                    # add a tag to the 2nd most recent
+timew-rs modify end @1 16:45              # fix an end time
+timew-rs undo                             # revert the last change
+```
+
+| Group | Commands |
 | --- | --- |
-| `summary [<range>] [<tags>] [@ids]` | `timew-rs summary :week` |
-| `export [<range>] [<tags>] [@ids]` | `timew-rs export :lastmonth meetings` |
-| `tags [<range>] [<tags>]` | `timew-rs tags :year` |
-| `get <dom-reference>…` | `timew-rs get dom.active.duration` |
+| Tracking | `start`, `stop`, `track`, `continue`, `cancel` |
+| Editing | `annotate`, `tag`, `untag`, `retag`, `delete`, `modify`, `move`, `lengthen`, `shorten`, `resize`, `split`, `join`, `fill`, `undo`, `import` |
+| Reports | `summary`, `day`, `week`, `month`, `gaps`, `tags`, `export`, `get`, extension reports |
+| Other | `config`, `show`, `extensions`, `diagnostics`, `help` |
 
-A range is either `:hint` (`:day`, `:week`, `:month`, `:lastyear`, …) or ISO
-dates (`2025-03-01 - 2025-03-31`). `timew-rs` currently **requires**
-`TIMEWARRIORDB` to be set. Full reference: [docs/timew-rs.md](docs/timew-rs.md).
+Dates can be ISO (`2025-03-01T08:00`), informal (`8am`, `yesterday`,
+`monday`, `eom`) or range hints (`:week`, `:lastmonth`), durations
+`1h`, `30min`. The configuration (`timewarrior.cfg`), exclusions, holidays,
+tag colors and the undo journal work as in Timewarrior. The database is
+found the same way (`$TIMEWARRIORDB`, `~/.timewarrior`, or the XDG
+directories). Full reference, including the few deliberate differences:
+[docs/timew-rs.md](docs/timew-rs.md).
 
 ## timew-tui (terminal UI)
 
@@ -137,16 +155,18 @@ Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/t
 | Document | Contents |
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | Crate and module layout, data flow, the invariants the code relies on, the test approach |
-| [docs/timew-rs.md](docs/timew-rs.md) | CLI reference: commands, ranges, hints, DOM references, differences from Timewarrior |
+| [docs/timew-rs.md](docs/timew-rs.md) | CLI reference: commands, dates, ranges, hints, configuration, differences from Timewarrior |
 | [docs/timew-tui.md](docs/timew-tui.md) | TUI user guide (keys, filters, layouts) and how it is built internally |
-| [docs/data-format.md](docs/data-format.md) | The on-disk database format: directory layout, `.data` lines, `tags.data`, IDs |
+| [docs/data-format.md](docs/data-format.md) | The on-disk format: directory layout, `.data` lines, `tags.data`, `undo.data`, `timewarrior.cfg`, IDs |
 | [docs/example-data.md](docs/example-data.md) | The example data generator and the included data sets |
 
 ## Relationship to Timewarrior
 
 This is a clean-room reimplementation. The behavior was worked out by reading
 the Timewarrior C++ source (GothenburgBitFactory/timewarrior, `develop`
-branch, commit `3699d2e`) and comparing against the real `timew` binary.
-Several tests contain output captured from `timew`. The two programs share
-the same database format, so `timew-rs` and `timew-tui` can be used on an
-existing Timewarrior database.
+branch, commit `3699d2e`) and its tests, and by comparing against the real
+`timew` binary. The tests in `tests/cli.rs` contain output captured from
+`timew`, and `timew-rs` passes Timewarrior's Python test suite. The two
+programs share the same files, so `timew-rs` and `timew-tui` can be used on
+an existing Timewarrior database, and Timewarrior can keep using a database
+that `timew-rs` wrote to.

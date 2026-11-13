@@ -146,7 +146,8 @@ def main() -> None:
 
     data = out / "data"
     data.mkdir(parents=True, exist_ok=True)
-    (out / "timewarrior.cfg").touch()
+    # What a new Timewarrior database starts with.
+    (out / "timewarrior.cfg").write_text("reports.summary.ids = yes\nreports.summary.annotations = yes\n")
     for ym, lines in sorted(months.items()):
         (data / f"{ym}.data").write_text("\n".join(lines) + "\n")
     body = ",\n".join(f'  {json.dumps(t)}:{{"count":{c}}}' for t, c in sorted(counts.items()))

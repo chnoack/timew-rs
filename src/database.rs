@@ -1,42 +1,10 @@
-//! Aggregates all `YYYY-MM.data` files under `data/`, and assigns ephemeral
-//! interval IDs by counting backward from the most recent interval.
+//! The database: all `YYYY-MM.data` files of a data directory, plus the
+//! tag counts in `tags.data`.
 //!
-//! **This is the single most important, least obvious piece of behavior in
-//! the whole system.** IDs are NEVER stored on disk -- `@1` always means
-//! "the most recent interval" (the open one, if any is open), `@2` the one
-//! before it, and so on. The ID an interval has is entirely a function of
-//! its position when sorted newest-first, recomputed fresh on every
-//! invocation. We were bitten by exactly this earlier in this project: a
-//! `timew modify` with a bare time (no date) silently applied to *today*
-//! instead of the target historical date, and that is possible precisely
-//! because `@141` is not a stable identity -- it's "whichever interval is
-//! currently 141st-from-the-end."
-//!
-//! Clean-room port of `Database.cpp` + the ID-assignment logic in
-//! `data.cpp::getTracked` (GothenburgBitFactory/timewarrior, `develop`
-//! branch, commit 3699d2e), re-derived from reading that source, scoped
-//! down by deliberately omitting the `Rules`/holiday/exclusion-driven
-//! "synthetic interval" splitting (`expandLatest`'s flatten-on-exclusions
-//! path) -- confirmed by reading `expandLatest` that without exclusions
-//! configured, it always reduces to the simple "latest interval gets id 1"
-//! case, which is what this scoped project needs.
-//!
-//! Key facts about file/line ordering, confirmed by reading the source
-//! (not guessed):
-//!   - On startup, `.data` files are discovered, sorted *lexicographically*
-//!     by filename. Since filenames are `YYYY-MM.data`, this is also
-//!     chronological order (oldest to newest).
-//!   - `Database::begin()` iterates files in *reverse* (newest file first),
-//!     and within each file, iterates lines in *reverse* too. Since
-//!     `Datafile::commit()` sorts lines ascending-by-string before writing
-//!     (and the ISO prefix sorts chronologically), reverse-iterating a
-//!     file's lines gives newest-line-first.
-//!   - Net effect: `Database::begin()` yields intervals newest-to-oldest
-//!     across the whole database, which is exactly the order needed to
-//!     assign id=1 to the most recent interval, id=2 to the next, etc.
-//!   - An interval is always stored in the datafile keyed by its **start**
-//!     date's year/month (`Database::addInterval` / `getDatafile`), even if
-//!     it ends in a different month.
+//! IDs are never stored. Each time the data is read, intervals are numbered
+//! newest first: `@1` is the most recent one. Files are named by the
+//! (local) month an interval starts in, so reading the files in reverse
+//! name order, and each file's lines in reverse, gives newest first.
 
 use std::fs;
 use std::io;
@@ -44,231 +12,236 @@ use std::path::{Path, PathBuf};
 
 use crate::datafile::Datafile;
 use crate::interval::Interval;
-use crate::range::Range;
+use crate::range::{Epoch, Range};
+use crate::tags::TagsDatabase;
 
 pub struct Database {
     data_dir: PathBuf,
-    /// Loaded datafiles, kept in ascending filename order (oldest month
-    /// first), mirroring `Database::_files` after `initializeDatafiles()`.
     files: Vec<Datafile>,
+    tags: TagsDatabase,
+    /// Parsed intervals, newest first; dropped on every change.
+    cache: Option<Vec<Interval>>,
 }
 
-/// An interval together with the ephemeral id it was assigned for this
-/// query. Never persisted -- recomputed every time `Database::tracked` (or
-/// similar) is called.
+/// An interval together with its current ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tracked {
     pub id: u32,
     pub interval: Interval,
+    /// A piece of a running interval split by exclusions. It is not stored
+    /// as such; see `session::Session::flatten_latest`.
+    pub synthetic: bool,
 }
 
 impl Database {
-    /// `data_dir` is the `data/` subdirectory of a `TIMEWARRIORDB` root
-    /// (i.e. `<TIMEWARRIORDB>/data`), matching `paths::dbDataDir()`.
+    /// Open a data directory for reading. A missing directory is an empty
+    /// database. `tags.data` is read but never repaired.
     pub fn open(data_dir: impl Into<PathBuf>) -> io::Result<Self> {
         let data_dir = data_dir.into();
         let files = discover_datafiles(&data_dir)?;
-        Ok(Database { data_dir, files })
+        let (tags, _) = TagsDatabase::open(data_dir.join("tags.data"));
+        Ok(Database { data_dir, files, tags, cache: None })
+    }
+
+    /// Open a data directory for the command line: like [`open`], but a
+    /// missing or unreadable `tags.data` is rebuilt from the intervals (and
+    /// written). Returns the database, a notice for stdout and an error
+    /// message for stderr about the repair.
+    ///
+    /// [`open`]: Database::open
+    pub fn open_and_repair(data_dir: impl Into<PathBuf>) -> Result<(Self, String, Option<String>), String> {
+        let data_dir = data_dir.into();
+        let tags_path = data_dir.join("tags.data");
+        let exists = tags_path.exists();
+        let mut db = Database::open(&data_dir).map_err(|e| e.to_string())?;
+        let (tags, error) = TagsDatabase::open(&tags_path);
+        let mut notice = String::new();
+        if exists && error.is_none() {
+            db.tags = tags;
+            return Ok((db, notice, None));
+        }
+        db.tags = TagsDatabase::empty(&tags_path);
+        let intervals = db.intervals()?;
+        if !intervals.is_empty() {
+            if !exists {
+                notice.push_str("Tags database does not exist. ");
+            }
+            notice.push_str("Recreating from interval data...\n");
+            for interval in &intervals {
+                for tag in &interval.tags {
+                    db.tags.increment(tag);
+                }
+            }
+        }
+        db.tags.commit(true).map_err(|e| format!("Could not write {}: {e}", tags_path.display()))?;
+        Ok((db, notice, if exists { error } else { None }))
     }
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
     }
 
-    /// Every stored interval, newest-first, with ids assigned 1, 2, 3, ...
-    /// in that order. This is the core traversal every other query is built
-    /// on (mirrors `Database::begin()`/`end()` plus the id-assignment loop
-    /// in `getTracked`, minus the exclusion-driven synthetic-interval
-    /// splitting -- see module docs).
-    pub fn all_tracked(&mut self) -> Result<Vec<Tracked>, String> {
+    /// Names of the datafiles, oldest first.
+    pub fn file_names(&self) -> Vec<String> {
+        self.files.iter().filter_map(|f| f.path().file_name()?.to_str().map(str::to_string)).collect()
+    }
+
+    /// The tags known to `tags.data`.
+    pub fn tag_names(&self) -> Vec<String> {
+        self.tags.tags()
+    }
+
+    /// All intervals, newest first.
+    pub fn intervals(&mut self) -> Result<Vec<Interval>, String> {
+        if let Some(cache) = &self.cache {
+            return Ok(cache.clone());
+        }
         let mut result = Vec::new();
-        let mut next_id: u32 = 1;
-
-        // Newest file first.
         for file in self.files.iter_mut().rev() {
-            let lines = file.all_lines().map_err(|e| e.to_string())?;
-            // Lines are stored ascending-by-string (chronological) once
-            // committed, but may be append-order before a commit. We sort a
-            // local copy to guarantee newest-line-first within this file,
-            // matching the guarantee `Datafile::commit()` provides on disk
-            // (string-sort == chronological-sort for the fixed-width ISO
-            // prefix).
-            let mut sorted_lines: Vec<&String> = lines.iter().collect();
-            sorted_lines.sort();
-
-            for line in sorted_lines.into_iter().rev() {
+            let mut lines: Vec<String> = file.all_lines().map_err(|e| e.to_string())?.to_vec();
+            lines.sort();
+            for line in lines.iter().rev() {
                 if let Some(interval) = Interval::parse(line)? {
-                    result.push(Tracked { id: next_id, interval });
-                    next_id += 1;
+                    result.push(interval);
                 }
             }
         }
-
+        self.cache = Some(result.clone());
         Ok(result)
     }
 
-    /// All tracked intervals whose range intersects `range`. `Range::empty()`
-    /// (unset start and end) matches everything, mirroring
-    /// `IntervalFilterAllInRange({0,0})` usage for unbounded scans (e.g.
-    /// fill-forward/fill-backward in `validate.rs`).
-    ///
-    /// Results are returned oldest-first (ids ascending-by-recency get
-    /// reversed at the end), matching `getTracked`'s documented contract:
-    /// "sorted by date" even though ids are assigned while walking
-    /// newest-first. This matters for callers like `summary` that print
-    /// chronologically.
+    pub fn is_empty(&mut self) -> Result<bool, String> {
+        Ok(self.intervals()?.is_empty())
+    }
+
+    /// The most recent interval, if any.
+    pub fn latest(&mut self) -> Result<Option<Interval>, String> {
+        Ok(self.intervals()?.into_iter().next())
+    }
+
+    /// All intervals with their IDs, newest first (no exclusion handling).
+    pub fn all_tracked(&mut self) -> Result<Vec<Tracked>, String> {
+        Ok(self
+            .intervals()?
+            .into_iter()
+            .enumerate()
+            .map(|(i, interval)| Tracked { id: i as u32 + 1, interval, synthetic: false })
+            .collect())
+    }
+
+    /// Intervals intersecting `range` (all for an unbounded range), oldest
+    /// first.
     pub fn tracked_in_range(&mut self, range: &Range) -> Result<Vec<Tracked>, String> {
-        let unbounded = !range.is_started() && !range.is_ended();
-        let mut out = Vec::new();
-
-        for t in self.all_tracked()? {
-            if unbounded || t.interval.range.intersects(range) {
-                out.push(t);
-            } else if t.interval.range.end != 0 && t.interval.range.end <= range.start {
-                // We're walking newest-first; once we see an interval that
-                // ends at/before the query range's start, every earlier
-                // interval is also before it (ids/lines are chronologically
-                // ordered), so we can stop early. Mirrors the `set_done`
-                // early-exit optimization in `IntervalFilterAllInRange`.
-                break;
-            }
-        }
-
+        let mut out: Vec<Tracked> = self
+            .all_tracked()?
+            .into_iter()
+            .filter(|t| range.is_unbounded() || t.interval.range.intersects(range))
+            .collect();
         out.reverse();
         Ok(out)
     }
 
-    /// Fetch tracked intervals by their ephemeral id (as currently assigned
-    /// across the whole database). Returns them in the order the ids were
-    /// given, with `None` for any id that doesn't currently exist.
+    /// The intervals with the given IDs, `None` for unknown ones.
     pub fn tracked_by_ids(&mut self, ids: &[u32]) -> Result<Vec<Option<Tracked>>, String> {
         let all = self.all_tracked()?;
-        Ok(ids
-            .iter()
-            .map(|id| all.iter().find(|t| t.id == *id).cloned())
-            .collect())
+        Ok(ids.iter().map(|id| all.iter().find(|t| t.id == *id).cloned()).collect())
     }
 
-    /// The single most recent interval (id 1), if any exists.
-    pub fn latest(&mut self) -> Result<Option<Tracked>, String> {
-        // We only need the very first (newest file, newest line) entry, but
-        // reuse all_tracked for correctness/simplicity at this project's
-        // scale; a real large-database implementation would short-circuit
-        // after the first match the way the C++ iterator-based code does.
-        Ok(self.all_tracked()?.into_iter().next())
-    }
-
-    /// Add a new interval, keyed into the datafile matching its **start**
-    /// date's year/month (matches `Database::addInterval`/`getDatafile`).
-    /// Does not touch `tags.data` -- callers that care about tag usage
-    /// counts (e.g. the `tag`/`track`/`start` commands) update `tags.rs`
-    /// separately, mirroring how `Database::addInterval` and
-    /// `TagInfoDatabase` are distinct collaborators in the C++ source.
-    pub fn add_interval(&mut self, interval: &Interval) -> Result<(), String> {
+    /// Add an interval. Returns the tags that were not known before.
+    pub fn add_interval(&mut self, interval: &Interval) -> Result<Vec<String>, String> {
         if interval.range.is_ended() && interval.range.start > interval.range.end {
             return Err("Cannot add an interval that ends before it starts.".to_string());
         }
         let idx = self.datafile_index_for(interval.range.start);
-        self.files[idx].add_interval(interval)
+        self.files[idx].add_interval(interval)?;
+        self.cache = None;
+        let mut new_tags = Vec::new();
+        for tag in &interval.tags {
+            if self.tags.increment(tag) == -1 {
+                new_tags.push(tag.clone());
+            }
+        }
+        Ok(new_tags)
     }
 
-    /// Remove an interval, keyed by its start date the same way
-    /// `add_interval` is (matches `Database::deleteInterval`).
     pub fn delete_interval(&mut self, interval: &Interval) -> Result<(), String> {
         let idx = self.datafile_index_for(interval.range.start);
-        self.files[idx].delete_interval(interval)
+        self.files[idx].delete_interval(interval)?;
+        self.cache = None;
+        for tag in &interval.tags {
+            // A tag missing from tags.data is simply not counted.
+            let _ = self.tags.decrement(tag);
+        }
+        Ok(())
     }
 
-    /// Replace `from` with `to`: delete the old serialization, add the new
-    /// one. This two-step dance (rather than an in-place edit) is
-    /// deliberate and matches `Database::modifyInterval` exactly, because a
-    /// modification can change the start date enough to move the interval
-    /// into a different month's datafile.
-    pub fn modify_interval(&mut self, from: &Interval, to: &Interval) -> Result<(), String> {
+    /// Replace `from` with `to` (either may be empty).
+    pub fn modify_interval(&mut self, from: &Interval, to: &Interval) -> Result<Vec<String>, String> {
         if !from.is_empty() {
             self.delete_interval(from)?;
         }
         if !to.is_empty() {
-            self.add_interval(to)?;
+            return self.add_interval(to);
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
-    /// Persist all pending changes across every loaded datafile.
-    pub fn commit(&mut self) -> io::Result<()> {
+    /// Write all changed files.
+    pub fn commit(&mut self) -> Result<(), String> {
         for file in &mut self.files {
-            file.commit()?;
+            file.commit().map_err(|e| format!("Could not write to data file {}: {e}", file.path().display()))?;
+        }
+        if self.tags.is_modified() {
+            self.tags.commit(false).map_err(|e| format!("Could not write tags database: {e}"))?;
         }
         Ok(())
     }
 
-    /// Find (creating on demand, in-memory only -- not written until
-    /// `commit`) the index into `self.files` for the datafile that should
-    /// hold an interval starting at `start_epoch`.
-    fn datafile_index_for(&mut self, start_epoch: crate::range::Epoch) -> usize {
-        let (year, month) = crate::interval::year_month_of(start_epoch);
+    fn datafile_index_for(&mut self, start: Epoch) -> usize {
+        let (year, month) = crate::interval::year_month_of(start);
         let name = format!("{year:04}-{month:02}.data");
-
-        if let Some(idx) = self.files.iter().position(|f| {
-            f.path().file_name().and_then(|n| n.to_str()) == Some(name.as_str())
-        }) {
+        if let Some(idx) = self.files.iter().position(|f| f.path().file_name().and_then(|n| n.to_str()) == Some(&name)) {
             return idx;
         }
-
-        let path = self.data_dir.join(&name);
-        self.files.push(Datafile::new(path));
-        self.files.len() - 1
+        self.files.push(Datafile::new(self.data_dir.join(&name)));
+        self.files.sort_by(|a, b| a.path().cmp(b.path()));
+        self.files.iter().position(|f| f.path().file_name().and_then(|n| n.to_str()) == Some(&name)).unwrap()
     }
 }
 
-/// Scan `data_dir` for files matching `YYYY-MM.data`, returning `Datafile`
-/// handles sorted ascending by filename (oldest month first), matching
-/// `Database::initializeDatafiles`. A missing `data_dir` is treated as "no
-/// files yet" rather than an error (a brand new TIMEWARRIORDB has no data/
-/// directory until the first write).
 fn discover_datafiles(data_dir: &Path) -> io::Result<Vec<Datafile>> {
     let entries = match fs::read_dir(data_dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
-
     let mut names: Vec<String> = Vec::new();
     for entry in entries {
         let entry = entry?;
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else { continue };
-        if is_month_datafile_name(name) {
+        if let Some(name) = entry.file_name().to_str()
+            && is_month_datafile_name(name)
+        {
             names.push(name.to_string());
         }
     }
     names.sort();
-
     Ok(names.into_iter().map(|name| Datafile::new(data_dir.join(name))).collect())
 }
 
-/// Matches `Database::initializeDatafiles`'s check: 8th-from-last char is
-/// `-` and the name ends in `.data`, e.g. `2026-10.data`. We additionally
-/// require the two numeric groups to actually be digits, which the C++
-/// source does not strictly validate at this stage (it relies on `strtol`
-/// silently returning 0 for garbage) -- being stricter here only narrows
-/// what we accept, it never accepts something the original would reject.
+/// `YYYY-MM.data`
 fn is_month_datafile_name(name: &str) -> bool {
-    if !name.ends_with(".data") || name.len() < 8 {
-        return false;
-    }
-    let bytes = name.as_bytes();
-    if bytes[bytes.len() - 8] != b'-' {
-        return false;
-    }
-    let year = &name[0..4];
-    let month = &name[5..7];
-    year.chars().all(|c| c.is_ascii_digit()) && month.chars().all(|c| c.is_ascii_digit())
+    let b = name.as_bytes();
+    b.len() == 12
+        && name.ends_with(".data")
+        && b[4] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datetime::make_local;
     use crate::interval::parse_iso;
 
     fn tmp_dir(name: &str) -> PathBuf {
@@ -282,6 +255,14 @@ mod tests {
         fs::write(dir.join(name), lines.join("\n") + "\n").unwrap();
     }
 
+    fn iv(start: &str, end: &str, tag: &str) -> Interval {
+        let mut i = Interval::new(Range::new(parse_iso(start).unwrap(), if end.is_empty() { 0 } else { parse_iso(end).unwrap() }));
+        if !tag.is_empty() {
+            i.add_tag(tag);
+        }
+        i
+    }
+
     #[test]
     fn discovers_only_month_shaped_data_files() {
         let dir = tmp_dir("discover");
@@ -289,11 +270,10 @@ mod tests {
         fs::write(dir.join("tags.data"), "{}").unwrap();
         fs::write(dir.join("undo.data"), "").unwrap();
         fs::write(dir.join("notes.txt"), "").unwrap();
-
+        fs::write(dir.join("x2026-10.data"), "").unwrap();
         let files = discover_datafiles(&dir).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path().file_name().unwrap(), "2026-10.data");
-
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -305,181 +285,100 @@ mod tests {
     }
 
     #[test]
-    fn ids_assigned_newest_first_across_single_file() {
-        let dir = tmp_dir("ids-single-file");
+    fn ids_assigned_newest_first_across_files() {
+        let dir = tmp_dir("ids");
+        write_month_file(&dir, "2026-09.data", &["inc 20260915T070000Z - 20260915T080000Z # old"]);
         write_month_file(
             &dir,
             "2026-10.data",
-            &[
-                "inc 20261001T070000Z - 20261001T080000Z # first",
-                "inc 20261002T070000Z - 20261002T080000Z # second",
-                "inc 20261003T070000Z - 20261003T080000Z # third",
-            ],
+            &["inc 20261002T070000Z - 20261002T080000Z # b", "inc 20261001T070000Z - 20261001T080000Z # a"],
         );
-
         let mut db = Database::open(&dir).unwrap();
-        let tracked = db.all_tracked().unwrap();
-        assert_eq!(tracked.len(), 3);
-        // Newest (third) is id 1, oldest (first) is id 3.
-        assert_eq!(tracked[0].id, 1);
-        assert!(tracked[0].interval.has_tag("third"));
-        assert_eq!(tracked[1].id, 2);
-        assert!(tracked[1].interval.has_tag("second"));
-        assert_eq!(tracked[2].id, 3);
-        assert!(tracked[2].interval.has_tag("first"));
-
+        let all = db.all_tracked().unwrap();
+        let tags: Vec<(u32, &str)> = all.iter().map(|t| (t.id, t.interval.tags[0].as_str())).collect();
+        assert_eq!(tags, vec![(1, "b"), (2, "a"), (3, "old")]);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn ids_assigned_newest_first_across_multiple_files() {
-        // This is the critical case: id assignment must span file
-        // boundaries correctly, with the NEWER MONTH'S intervals getting
-        // lower ids regardless of file discovery order.
-        let dir = tmp_dir("ids-multi-file");
-        write_month_file(
-            &dir,
-            "2026-09.data",
-            &["inc 20260930T070000Z - 20260930T080000Z # september"],
-        );
-        write_month_file(
-            &dir,
-            "2026-10.data",
-            &["inc 20261001T070000Z - 20261001T080000Z # october"],
-        );
-        write_month_file(
-            &dir,
-            "2026-11.data",
-            &["inc 20261101T070000Z - 20261101T080000Z # november"],
-        );
-
-        let mut db = Database::open(&dir).unwrap();
-        let tracked = db.all_tracked().unwrap();
-        assert_eq!(tracked.len(), 3);
-        assert_eq!(tracked[0].id, 1);
-        assert!(tracked[0].interval.has_tag("november"));
-        assert_eq!(tracked[1].id, 2);
-        assert!(tracked[1].interval.has_tag("october"));
-        assert_eq!(tracked[2].id, 3);
-        assert!(tracked[2].interval.has_tag("september"));
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn open_interval_is_always_id_one() {
-        let dir = tmp_dir("open-is-one");
-        write_month_file(
-            &dir,
-            "2026-10.data",
-            &[
-                "inc 20261001T070000Z - 20261001T080000Z # closed",
-                "inc 20261002T070000Z # open",
-            ],
-        );
-
-        let mut db = Database::open(&dir).unwrap();
-        let latest = db.latest().unwrap().unwrap();
-        assert_eq!(latest.id, 1);
-        assert!(latest.interval.is_open());
-        assert!(latest.interval.has_tag("open"));
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn add_interval_creates_datafile_keyed_by_start_month() {
+    fn add_interval_creates_datafile_keyed_by_local_start_month() {
         let dir = tmp_dir("add-keyed");
         let mut db = Database::open(&dir).unwrap();
-
-        let iv = Interval::new(Range::new(
-            parse_iso("20261015T090000Z").unwrap(),
-            parse_iso("20261015T100000Z").unwrap(),
-        ));
-        db.add_interval(&iv).unwrap();
+        let start = make_local(2026, 10, 15, 9, 0, 0);
+        let new_tags = db.add_interval(&{
+            let mut i = Interval::new(Range::new(start, start + 3600));
+            i.add_tag("x");
+            i
+        });
+        assert_eq!(new_tags.unwrap(), vec!["x".to_string()]);
         db.commit().unwrap();
-
         assert!(dir.join("2026-10.data").exists());
-
+        assert!(fs::read_to_string(dir.join("tags.data")).unwrap().contains("\"x\":{\"count\":1}"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn modify_interval_moves_across_month_boundary() {
-        // An interval starting in October, modified to start in November,
-        // must be removed from 2026-10.data and added to 2026-11.data.
         let dir = tmp_dir("modify-cross-month");
         let mut db = Database::open(&dir).unwrap();
-
-        let original = Interval::new(Range::new(
-            parse_iso("20261031T230000Z").unwrap(),
-            parse_iso("20261031T235900Z").unwrap(),
-        ));
+        let oct = make_local(2026, 10, 31, 23, 0, 0);
+        let nov = make_local(2026, 11, 1, 0, 30, 0);
+        let original = Interval::new(Range::new(oct, oct + 600));
         db.add_interval(&original).unwrap();
         db.commit().unwrap();
-        assert!(dir.join("2026-10.data").exists());
-
-        let modified = Interval::new(Range::new(
-            parse_iso("20261101T000000Z").unwrap(),
-            parse_iso("20261101T005900Z").unwrap(),
-        ));
+        let modified = Interval::new(Range::new(nov, nov + 600));
         db.modify_interval(&original, &modified).unwrap();
         db.commit().unwrap();
-
-        let oct_contents = fs::read_to_string(dir.join("2026-10.data")).unwrap_or_default();
-        assert!(!oct_contents.contains("20261031T230000Z"), "old interval should be gone from October file");
-        let nov_contents = fs::read_to_string(dir.join("2026-11.data")).unwrap();
-        assert!(nov_contents.contains("20261101T000000Z"));
-
+        assert!(!dir.join("2026-10.data").exists(), "an emptied file is removed");
+        assert!(dir.join("2026-11.data").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn tracked_in_range_filters_and_returns_oldest_first() {
-        let dir = tmp_dir("range-filter");
-        write_month_file(
-            &dir,
-            "2026-10.data",
-            &[
-                "inc 20261001T070000Z - 20261001T080000Z # before",
-                "inc 20261005T070000Z - 20261005T080000Z # inside1",
-                "inc 20261006T070000Z - 20261006T080000Z # inside2",
-                "inc 20261010T070000Z - 20261010T080000Z # after",
-            ],
-        );
-
-        let mut db = Database::open(&dir).unwrap();
-        let range = Range::new(
-            parse_iso("20261003T000000Z").unwrap(),
-            parse_iso("20261008T000000Z").unwrap(),
-        );
-        let tracked = db.tracked_in_range(&range).unwrap();
-        let tags: Vec<&str> = tracked.iter().map(|t| t.interval.tags[0].as_str()).collect();
-        assert_eq!(tags, vec!["inside1", "inside2"], "expected chronological (oldest-first) order");
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn tracked_by_ids_preserves_requested_order_and_handles_missing() {
-        let dir = tmp_dir("by-ids");
+        let dir = tmp_dir("in-range");
         write_month_file(
             &dir,
             "2026-10.data",
             &[
                 "inc 20261001T070000Z - 20261001T080000Z # a",
                 "inc 20261002T070000Z - 20261002T080000Z # b",
+                "inc 20261003T070000Z - 20261003T080000Z # c",
             ],
         );
-
         let mut db = Database::open(&dir).unwrap();
-        // id 1 = newest = "b", id 2 = "a", id 99 doesn't exist.
-        let results = db.tracked_by_ids(&[2, 99, 1]).unwrap();
-        assert_eq!(results.len(), 3);
-        assert!(results[0].as_ref().unwrap().interval.has_tag("a"));
-        assert!(results[1].is_none());
-        assert!(results[2].as_ref().unwrap().interval.has_tag("b"));
+        let range = Range::new(parse_iso("20261002T000000Z").unwrap(), parse_iso("20261004T000000Z").unwrap());
+        let got: Vec<String> = db.tracked_in_range(&range).unwrap().into_iter().map(|t| t.interval.tags[0].clone()).collect();
+        assert_eq!(got, vec!["b", "c"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
+    #[test]
+    fn repairs_missing_tags_database() {
+        let dir = tmp_dir("repair");
+        write_month_file(&dir, "2026-10.data", &["inc 20261001T070000Z - 20261001T080000Z # a b"]);
+        let (_, msg, err) = Database::open_and_repair(&dir).unwrap();
+        assert_eq!(msg, "Tags database does not exist. Recreating from interval data...\n");
+        assert_eq!(err, None);
+        let tags = fs::read_to_string(dir.join("tags.data")).unwrap();
+        assert_eq!(tags, "{\n  \"a\":{\"count\":1},\n  \"b\":{\"count\":1}\n}");
+        let (_, msg, _) = Database::open_and_repair(&dir).unwrap();
+        assert_eq!(msg, "");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_and_open_intervals() {
+        let dir = tmp_dir("delete");
+        let mut db = Database::open(&dir).unwrap();
+        let a = iv("20261001T070000Z", "20261001T080000Z", "a");
+        let b = iv("20261001T090000Z", "", "b");
+        db.add_interval(&a).unwrap();
+        db.add_interval(&b).unwrap();
+        assert!(db.latest().unwrap().unwrap().is_open());
+        db.delete_interval(&b).unwrap();
+        assert_eq!(db.latest().unwrap().unwrap(), a);
+        assert!(db.delete_interval(&b).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }

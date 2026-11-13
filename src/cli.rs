@@ -1,306 +1,426 @@
-//! Minimal argument parser: classifies `argv[1..]` into a command word,
-//! `@N` ids, `:hint` tokens, a datetime range, and plain tags.
+//! Command line analysis.
 //!
-//! This is a deliberately narrow, purpose-built parser -- NOT a port of
-//! `CLI.cpp`'s general lexer (which also handles DOM references,
-//! durations, config overrides, and quote/escape re-tokenizing of a single
-//! shell string for contexts outside of normal argv). Those are out of
-//! scope for this project. What IS in scope and ported faithfully:
+//! Every argument is classified as one of:
 //!
-//!   - `@<positive-integer>` token recognition, confirmed against
-//!     `CLI::identifyIds` in the C++ source: the ENTIRE token must match
-//!     `@` followed by digits (not just a prefix), and `@0` or `@-1` are
-//!     rejected as invalid ids, not silently treated as tags.
-//!   - `:name` tokens are hints, matched by `CLI::findHint`'s literal
-//!     `":" + hint` comparison.
-//!   - Because `argv` is already shell-split by the OS before our process
-//!     starts, each element is one token -- we don't need to re-lex a
-//!     joined string the way the C++ source sometimes does for embedded/
-//!     extension contexts.
-//!
-//! Remaining (non-id, non-hint) tokens are split into "range-shaped" ones
-//! (dates, `-`, `to`) and everything else, which become tags. This mirrors
-//! the effect of `CLI::getRange` picking date-shaped tokens out of the
-//! token stream while `CLI::getTags` picks up everything tagged `TAG`
-//! (i.e. not recognized as a date, duration, or keyword) -- re-derived
-//! from that behavior, not transcribed from the lexer internals.
+//! - the command (the first word that is a command name or an unambiguous
+//!   prefix of one; extension reports count as commands),
+//! - a hint, `:name` (also unambiguous prefixes, such as `:ye` would be if
+//!   it were unique),
+//! - an ID, `@N` with N >= 1,
+//! - a configuration override, `rc.name=value` or `rc.name:value`,
+//! - a date (anything `datetime` can parse) or a duration,
+//! - a range keyword: `from`, `since`, `to`, `until`, `-`, `for`, `before`,
+//!   `after`, `ago`,
+//! - a DOM reference, `dom.…`,
+//! - otherwise a tag.
 
-use crate::datetime::{expand_range_hint, parse_datetime};
-use crate::range::Range;
+use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ParsedArgs {
-    pub command: Option<String>,
-    pub ids: Vec<u32>,
-    pub hints: Vec<String>,
-    /// Remaining tokens not consumed as the command/an id/a hint, in
-    /// original order. Commands that need date-range parsing consume a
-    /// prefix of these (see `take_range`); whatever is left after that is
-    /// the tag list.
-    pub rest: Vec<String>,
+use crate::datetime;
+use crate::duration;
+use crate::range::{Epoch, Range};
+use crate::text::auto_complete;
+
+pub const COMMANDS: &[&str] = &[
+    "annotate", "cancel", "config", "continue", "delete", "diagnostics", "export", "extensions", "fill", "gaps",
+    "get", "help", "--help", "-h", "import", "join", "lengthen", "modify", "move", "report", "resize", "retag",
+    "shorten", "show", "split", "start", "stop", "tag", "tags", "track", "undo", "untag",
+];
+
+/// Reports that are built in but behave like extensions.
+pub const BUILTIN_REPORTS: &[&str] = &["day", "month", "summary", "week"];
+
+pub const HINTS: &[&str] = &[
+    ":adjust", ":all", ":annotations", ":no-annotations", ":blank", ":color", ":nocolor", ":day", ":debug", ":fill",
+    ":fortnight", ":holidays", ":no-holidays", ":ids", ":no-ids", ":lastmonth", ":lastquarter", ":lastweek",
+    ":lastyear", ":month", ":quarter", ":quiet", ":tags", ":no-tags", ":today", ":week", ":year", ":yes",
+    ":yesterday", ":monday", ":tuesday", ":wednesday", ":thursday", ":friday", ":saturday", ":sunday",
+];
+
+const KEYWORDS: &[&str] = &["from", "since", "to", "until", "-", "for", "before", "after", "ago"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Role {
+    Command,
+    /// An extension report (or a built-in one such as `summary`).
+    Report,
+    /// A word consumed by a command as its subcommand (`modify start`).
+    SubCommand,
+    Hint,
+    Id(u32),
+    Override { name: String, value: String },
+    Date,
+    Duration,
+    Keyword,
+    Dom,
+    Tag,
 }
 
-impl ParsedArgs {
-    pub fn hint(&self, name: &str) -> bool {
-        self.hints.iter().any(|h| h == name)
-    }
-
-    /// Consume a leading date-range from `rest` (one of: nothing, a single
-    /// `:hint`, a single date, or `<date> - <date>` / `<date> to <date>`),
-    /// returning the resolved `Range` and leaving whatever tokens remain
-    /// (which become tags) in `self.rest`.
-    ///
-    /// Order of precedence matches the C++ source's `getRange`: a range
-    /// hint, if present among the hints already extracted, takes priority
-    /// over any date tokens (a command like `export :week` doesn't also
-    /// need date args, but if both were somehow given, the hint wins,
-    /// matching `expandIntervalHint` being checked first in `getRange`'s
-    /// token classification loop).
-    pub fn take_range(&mut self) -> Result<Option<Range>, String> {
-        for hint in &self.hints {
-            if let Some(range) = expand_range_hint(hint) {
-                return Ok(Some(range));
-            }
-        }
-
-        if self.rest.is_empty() {
-            return Ok(None);
-        }
-
-        // Try <date> - <date> / <date> to <date> first (greedy), then a
-        // single <date>, else leave `rest` untouched (not a range at all --
-        // e.g. a bare `timew tag @1 sometag` where "sometag" isn't a date).
-        if self.rest.len() >= 3
-            && is_datetime_token(&self.rest[0])
-            && (self.rest[1] == "-" || self.rest[1] == "to")
-            && is_datetime_token(&self.rest[2])
-        {
-            let start = parse_datetime(&self.rest[0])?;
-            let end = parse_datetime(&self.rest[2])?;
-            self.rest.drain(0..3);
-            return Ok(Some(Range::new(start, end)));
-        }
-
-        if is_datetime_token(&self.rest[0]) {
-            let start = parse_datetime(&self.rest[0])?;
-            self.rest.remove(0);
-            return Ok(Some(Range::new(start, 0)));
-        }
-
-        Ok(None)
-    }
-
-    /// Everything left in `rest` after `take_range` (or all of `rest`, if
-    /// `take_range` was never called) is tag text, mirroring `getTags()`.
-    pub fn tags(&self) -> &[String] {
-        &self.rest
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arg {
+    pub raw: String,
+    /// The full name for commands, reports and hints given as a prefix.
+    pub canonical: String,
+    pub role: Role,
 }
 
-/// A token "looks like" a datetime argument if it's the compact ISO form,
-/// or starts with `YYYY-MM-DD` (the extended form `parse_datetime` also
-/// accepts). We deliberately check shape here (not full validity) so that a
-/// malformed-but-date-shaped token still gets routed to `parse_datetime`
-/// and produces a proper parse error, rather than silently being treated as
-/// a tag.
-fn is_datetime_token(s: &str) -> bool {
-    if s.len() == 16 && s.as_bytes().get(8) == Some(&b'T') && s.ends_with('Z') {
-        return true;
-    }
-    if s.len() >= 10 {
-        let bytes = s.as_bytes();
-        return bytes[0..4].iter().all(u8::is_ascii_digit)
-            && bytes[4] == b'-'
-            && bytes[5..7].iter().all(u8::is_ascii_digit)
-            && bytes[7] == b'-'
-            && bytes[8..10].iter().all(u8::is_ascii_digit);
-    }
-    false
+#[derive(Debug, Clone, Default)]
+pub struct Cli {
+    pub args: Vec<Arg>,
 }
 
-/// Parse `argv[1..]` (i.e. excluding the program name itself) into a
-/// `ParsedArgs`. The first non-id, non-hint token is taken as the command.
-pub fn parse(args: &[String]) -> Result<ParsedArgs, String> {
-    let mut parsed = ParsedArgs::default();
-
-    for arg in args {
-        if let Some(id) = parse_id_token(arg)? {
-            parsed.ids.push(id);
-            continue;
-        }
-
-        if let Some(hint) = arg.strip_prefix(':')
-            && !hint.is_empty() {
-                parsed.hints.push(hint.to_string());
-                continue;
-            }
-
-        if parsed.command.is_none() {
-            parsed.command = Some(arg.clone());
-        } else {
-            parsed.rest.push(arg.clone());
-        }
+/// Is the whole token a UUID (or the start of one, 8+ characters)? Such
+/// tokens are never dates.
+fn is_uuid_like(s: &str) -> bool {
+    const PATTERN: &[u8] = b"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
+    let b = s.as_bytes();
+    if b.len() < 8 || b.len() > 36 {
+        return false;
     }
-
-    Ok(parsed)
+    b.iter().zip(PATTERN).all(|(c, p)| if *p == b'x' { c.is_ascii_hexdigit() } else { c == p })
 }
 
-/// Recognize `@<positive-integer>` tokens. The whole token must match (a
-/// trailing non-digit character disqualifies it), and `@0` is rejected as
-/// invalid -- both ported from `CLI::identifyIds`'s `pig.eos()` check and
-/// its explicit `if (digits <= 0) throw ...`.
-fn parse_id_token(token: &str) -> Result<Option<u32>, String> {
+fn is_quoted(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0]
+}
+
+/// The kind of value a token is: a date, a duration or neither.
+fn lex(s: &str) -> Role {
+    if s.is_empty() || is_quoted(s) || is_uuid_like(s) {
+        return Role::Tag;
+    }
+    if s.contains(char::is_whitespace) {
+        return if duration::parse(s).is_some() { Role::Duration } else { Role::Tag };
+    }
+    if datetime::parse_point(s).is_some() {
+        return Role::Date;
+    }
+    if duration::parse(s).is_some() {
+        return Role::Duration;
+    }
+    Role::Tag
+}
+
+/// `@N`: `Ok(None)` if not an ID at all, an error for `@0`.
+fn parse_id(token: &str) -> Result<Option<u32>, String> {
     let Some(digits) = token.strip_prefix('@') else { return Ok(None) };
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Ok(None);
     }
-    let value: i64 = digits.parse().map_err(|_| format!("'{token}' is not a valid ID."))?;
-    if value <= 0 {
-        return Err(format!("'{token}' is not a valid ID."));
+    let value: u64 = digits.trim_start_matches('0').parse().unwrap_or(0);
+    if value == 0 {
+        return Err("'@0' is not a valid ID.".to_string());
     }
-    Ok(Some(value as u32))
+    u32::try_from(value).map(Some).map_err(|_| format!("'{token}' is not a valid ID."))
+}
+
+fn canonical(value: &str, names: &[&str]) -> Option<String> {
+    match auto_complete(value, names.iter().copied()).as_slice() {
+        [one] => Some(one.to_string()),
+        _ => None,
+    }
+}
+
+impl Cli {
+    /// Analyze `argv[1..]`. `reports` are the names of the installed
+    /// extensions, which may be used as commands.
+    pub fn parse(args: &[String], reports: &[String]) -> Result<Cli, String> {
+        let mut report_names: Vec<&str> = BUILTIN_REPORTS.to_vec();
+        report_names.extend(reports.iter().map(String::as_str));
+
+        let mut out = Vec::with_capacity(args.len());
+        let mut have_command = false;
+        for raw in args {
+            // Control characters become spaces.
+            let raw: String = raw.chars().map(|c| if (c as u32) <= 32 { ' ' } else { c }).collect();
+            let raw = raw.trim().to_string();
+
+            if let Some(rest) = raw.strip_prefix("rc.")
+                && let Some(sep) = rest.find(['=', ':'])
+                && sep > 0
+            {
+                let role = Role::Override { name: rest[..sep].to_string(), value: rest[sep + 1..].to_string() };
+                out.push(Arg { canonical: raw.clone(), raw, role });
+                continue;
+            }
+            if let Some(id) = parse_id(&raw)? {
+                out.push(Arg { canonical: raw.clone(), raw, role: Role::Id(id) });
+                continue;
+            }
+            if have_command && (raw == "--help" || raw == "-h") {
+                // `timew <command> --help` is `timew help <command>`.
+                for a in out.iter_mut() {
+                    if matches!(a.role, Role::Command | Role::Report) {
+                        a.role = Role::Tag;
+                    }
+                }
+                out.push(Arg { canonical: "help".to_string(), raw, role: Role::Command });
+                continue;
+            }
+            if !have_command
+                && let Some(c) = canonical(&raw, COMMANDS) {
+                    have_command = true;
+                    out.push(Arg { raw, canonical: c, role: Role::Command });
+                    continue;
+                }
+            if raw.starts_with(':')
+                && let Some(h) = canonical(&raw, HINTS)
+            {
+                out.push(Arg { raw, canonical: h, role: Role::Hint });
+                continue;
+            }
+            if !have_command && let Some(r) = canonical(&raw, &report_names) {
+                have_command = true;
+                out.push(Arg { raw, canonical: r, role: Role::Report });
+                continue;
+            }
+            let role = if KEYWORDS.contains(&raw.as_str()) {
+                Role::Keyword
+            } else if raw.starts_with("dom.") {
+                Role::Dom
+            } else {
+                lex(&raw)
+            };
+            out.push(Arg { canonical: raw.clone(), raw, role });
+        }
+        Ok(Cli { args: out })
+    }
+
+    /// The command or report name, if any.
+    pub fn command(&self) -> Option<&str> {
+        self.args.iter().find(|a| a.role == Role::Command).or_else(|| self.args.iter().find(|a| a.role == Role::Report)).map(|a| a.canonical.as_str())
+    }
+
+    /// Everything that is not the command, a hint or an override, as typed.
+    pub fn words(&self) -> Vec<String> {
+        self.args
+            .iter()
+            .filter(|a| !matches!(a.role, Role::Command | Role::Report | Role::SubCommand | Role::Hint | Role::Override { .. }))
+            .map(|a| a.raw.clone())
+            .collect()
+    }
+
+    /// Like [`Cli::words`] but without IDs: the free text of a command.
+    pub fn text(&self) -> String {
+        self.args
+            .iter()
+            .filter(|a| {
+                !matches!(a.role, Role::Command | Role::Report | Role::SubCommand | Role::Hint | Role::Override { .. } | Role::Id(_))
+            })
+            .map(|a| a.raw.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    pub fn ids(&self) -> BTreeSet<u32> {
+        self.args.iter().filter_map(|a| if let Role::Id(id) = a.role { Some(id) } else { None }).collect()
+    }
+
+    pub fn tags(&self) -> Vec<String> {
+        let set: BTreeSet<String> = self.args.iter().filter(|a| a.role == Role::Tag).map(|a| a.raw.clone()).collect();
+        set.into_iter().collect()
+    }
+
+    /// The (last) duration given, in seconds.
+    pub fn duration(&self) -> Option<i64> {
+        self.args.iter().filter(|a| a.role == Role::Duration).filter_map(|a| duration::parse(&a.raw)).next_back()
+    }
+
+    pub fn dom_refs(&self) -> Vec<String> {
+        self.args.iter().filter(|a| a.role == Role::Dom).map(|a| a.raw.clone()).collect()
+    }
+
+    pub fn overrides(&self) -> Vec<(String, String)> {
+        self.args
+            .iter()
+            .filter_map(|a| match &a.role {
+                Role::Override { name, value } => Some((name.clone(), value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn has_hint(&self, name: &str) -> bool {
+        let wanted = format!(":{name}");
+        self.args.iter().any(|a| a.role == Role::Hint && a.canonical == wanted)
+    }
+
+    /// `:name` → true, `:no-name` → false, otherwise `default`.
+    pub fn hint_or(&self, name: &str, default: bool) -> bool {
+        if self.has_hint(name) {
+            true
+        } else if self.has_hint(&format!("no-{name}")) {
+            false
+        } else {
+            default
+        }
+    }
+
+    /// Claim the first tag that is one of `names` as the subcommand.
+    pub fn take_subcommand(&mut self, names: &[&str]) -> Option<String> {
+        let arg = self.args.iter_mut().find(|a| a.role == Role::Tag && names.contains(&a.raw.as_str()))?;
+        arg.role = Role::SubCommand;
+        Some(arg.raw.clone())
+    }
+
+    /// The raw text of the dates given.
+    pub fn dates(&self) -> Vec<String> {
+        self.args.iter().filter(|a| a.role == Role::Date).map(|a| a.raw.clone()).collect()
+    }
+
+    /// The range given on the command line, or `default` if none:
+    ///
+    /// ```text
+    /// [from] <date>                  (a lone date may name a whole day/week/month)
+    /// [from] <date> to|- <date>
+    /// [from] <date> for <duration>
+    /// <duration> before|after <date>
+    /// <duration> ago
+    /// [for] <duration>
+    /// :hint
+    /// ```
+    pub fn range(&self, default: Range, now: Epoch) -> Result<Range, String> {
+        #[derive(PartialEq)]
+        enum T {
+            Date,
+            Duration,
+            All,
+            Word(&'static str),
+        }
+        let mut shape: Vec<T> = Vec::new();
+        let mut dates: Vec<Epoch> = Vec::new();
+        let mut first_date = String::new();
+        let mut dur = 0;
+        let mut names: Vec<String> = Vec::new();
+
+        for a in &self.args {
+            match &a.role {
+                Role::Hint => {
+                    if let Some(r) = datetime::expand_range_hint_at(&a.canonical[1..], now) {
+                        if r.is_unbounded() {
+                            shape.push(T::All);
+                            names.push("<all>".into());
+                        } else {
+                            dates.push(r.start);
+                            dates.push(r.end);
+                            shape.extend([T::Date, T::Word("to"), T::Date]);
+                            names.extend(["<date>".into(), "-".into(), "<date>".into()]);
+                        }
+                    }
+                }
+                Role::Date => {
+                    if first_date.is_empty() {
+                        first_date = a.raw.clone();
+                    }
+                    dates.push(datetime::parse_point(&a.raw).ok_or_else(|| format!("'{}' is not a valid date.", a.raw))?);
+                    shape.push(T::Date);
+                    names.push("<date>".into());
+                }
+                Role::Duration => {
+                    if shape.iter().all(|t| *t != T::Duration) {
+                        dur = duration::parse(&a.raw).unwrap_or(0);
+                    }
+                    shape.push(T::Duration);
+                    names.push("<duration>".into());
+                }
+                Role::Keyword => {
+                    let word = match a.raw.as_str() {
+                        "since" => "from",
+                        "until" => "to",
+                        "-" => "to",
+                        w => KEYWORDS.iter().find(|k| **k == w).copied().unwrap_or("to"),
+                    };
+                    shape.push(T::Word(word));
+                    names.push(a.raw.clone());
+                }
+                _ => {}
+            }
+        }
+
+        use T::*;
+        let d = |i: usize| dates.get(i).copied().unwrap_or(0);
+        let range = match shape.as_slice() {
+            [] => default,
+            [All] => Range::empty(),
+            [Date] => datetime::parse_range(&first_date)?,
+            [Word("from"), Date] => Range::new(d(0), 0),
+            [Date, Word("to"), Date] | [Word("from"), Date, Word("to"), Date] => Range::new(d(0), d(1)),
+            [Date, Word("for"), Duration] | [Word("from"), Date, Word("for"), Duration] => Range::new(d(0), d(0) + dur),
+            [Duration, Word("before"), Date] => Range::new(d(0) - dur, d(0)),
+            [Duration, Word("after"), Date] => Range::new(d(0), d(0) + dur),
+            [Duration, Word("ago")] => Range::new(now - dur, 0),
+            [Word("for"), Duration] | [Duration] => Range::new(now - dur, now),
+            _ => return Err(format!("Unrecognized date range: '{}'.", names.join(" "))),
+        };
+        if range.end != 0 && range.start > range.end {
+            return Err("The end of a date range must be after the start.".to_string());
+        }
+        Ok(range)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datetime::make_local;
 
-    fn args(words: &[&str]) -> Vec<String> {
-        words.iter().map(|s| s.to_string()).collect()
+    fn cli(words: &[&str]) -> Cli {
+        let args: Vec<String> = words.iter().map(|s| s.to_string()).collect();
+        Cli::parse(&args, &["totals.py".to_string()]).unwrap()
     }
 
     #[test]
-    fn parses_bare_command() {
-        let p = parse(&args(&["summary"])).unwrap();
-        assert_eq!(p.command.as_deref(), Some("summary"));
-        assert!(p.ids.is_empty());
-        assert!(p.hints.is_empty());
-        assert!(p.rest.is_empty());
+    fn classifies() {
+        let c = cli(&["track", "@3", ":adj", "2025-03-01T08:00", "-", "09:00", "foo", "rc.verbose=off", "dom.active"]);
+        assert_eq!(c.command(), Some("track"));
+        assert_eq!(c.ids().into_iter().collect::<Vec<_>>(), vec![3]);
+        assert!(c.has_hint("adjust"));
+        assert_eq!(c.tags(), vec!["foo".to_string()]);
+        assert_eq!(c.overrides(), vec![("verbose".to_string(), "off".to_string())]);
+        assert_eq!(c.dom_refs(), vec!["dom.active".to_string()]);
+        assert_eq!(c.dates().len(), 2);
     }
 
     #[test]
-    fn parses_command_with_id() {
-        let p = parse(&args(&["modify", "@141", "range"])).unwrap();
-        assert_eq!(p.command.as_deref(), Some("modify"));
-        assert_eq!(p.ids, vec![141]);
-        assert_eq!(p.rest, vec!["range".to_string()]);
+    fn command_prefixes_and_reports() {
+        assert_eq!(cli(&["sum"]).command(), Some("summary"));
+        assert_eq!(cli(&["tot"]).command(), Some("totals.py"));
+        assert_eq!(cli(&["st"]).command(), None);
+        assert_eq!(cli(&["start", "--help"]).command(), Some("help"));
+        assert_eq!(cli(&["start", "--help"]).words(), vec!["start".to_string()]);
+        // After the command, report names are just tags.
+        assert_eq!(cli(&["start", "summary"]).tags(), vec!["summary".to_string()]);
     }
 
     #[test]
-    fn parses_command_with_hint() {
-        let p = parse(&args(&["track", ":week", "MISC"])).unwrap();
-        assert_eq!(p.command.as_deref(), Some("track"));
-        assert_eq!(p.hints, vec!["week".to_string()]);
-        assert_eq!(p.rest, vec!["MISC".to_string()]);
+    fn ids() {
+        assert!(Cli::parse(&["delete".into(), "@0".into()], &[]).is_err());
+        assert_eq!(cli(&["tag", "@12x"]).tags(), vec!["@12x".to_string()]);
     }
 
     #[test]
-    fn id_zero_is_rejected() {
-        assert!(parse_id_token("@0").unwrap_err().contains("not a valid ID"));
-    }
-
-    #[test]
-    fn id_with_trailing_garbage_is_not_an_id() {
-        // The whole token must be @<digits> -- "@12x" isn't an id at all,
-        // it falls through to being treated as a plain word (and since it
-        // isn't recognized as anything else, ends up as a tag/command).
-        assert_eq!(parse_id_token("@12x").unwrap(), None);
-    }
-
-    #[test]
-    fn negative_looking_id_is_not_recognized_as_id_token() {
-        // "@-5" does not match `@<digits>` at all (strip_prefix leaves
-        // "-5", which is not all-digits), so it's not an id token -- this
-        // matches the C++ lexer never matching such a malformed token as
-        // an ID pattern in the first place.
-        assert_eq!(parse_id_token("@-5").unwrap(), None);
-    }
-
-    #[test]
-    fn multiple_ids_collected_in_order() {
-        let p = parse(&args(&["delete", "@3", "@1", "@2"])).unwrap();
-        assert_eq!(p.ids, vec![3, 1, 2]);
-    }
-
-    #[test]
-    fn hint_lookup_helper() {
-        let p = parse(&args(&["export", ":lastmonth"])).unwrap();
-        assert!(p.hint("lastmonth"));
-        assert!(!p.hint("week"));
-    }
-
-    #[test]
-    fn take_range_prefers_hint_over_date_tokens() {
-        let mut p = parse(&args(&["export", ":day", "SomeTag"])).unwrap();
-        let range = p.take_range().unwrap();
-        assert!(range.is_some());
-        // "SomeTag" should remain as a tag, not be consumed as part of a range.
-        assert_eq!(p.rest, vec!["SomeTag".to_string()]);
-    }
-
-    #[test]
-    fn take_range_parses_closed_date_range_with_dash() {
-        let mut p = parse(&args(&[
-            "export",
-            "2026-10-01T00:00:00Z",
-            "-",
-            "2026-10-02T00:00:00Z",
-        ]))
-        .unwrap();
-        let range = p.take_range().unwrap().unwrap();
-        assert_eq!(range.start, crate::interval::parse_iso("20261001T000000Z").unwrap());
-        assert_eq!(range.end, crate::interval::parse_iso("20261002T000000Z").unwrap());
-        assert!(p.rest.is_empty());
-    }
-
-    #[test]
-    fn take_range_parses_closed_date_range_with_to() {
-        let mut p = parse(&args(&[
-            "export",
-            "2026-10-01T00:00:00Z",
-            "to",
-            "2026-10-02T00:00:00Z",
-        ]))
-        .unwrap();
-        let range = p.take_range().unwrap();
-        assert!(range.is_some());
-        assert!(p.rest.is_empty());
-    }
-
-    #[test]
-    fn take_range_parses_single_open_ended_date() {
-        let mut p = parse(&args(&["export", "2026-10-01T00:00:00Z"])).unwrap();
-        let range = p.take_range().unwrap().unwrap();
-        assert_eq!(range.start, crate::interval::parse_iso("20261001T000000Z").unwrap());
-        assert_eq!(range.end, 0);
-    }
-
-    #[test]
-    fn take_range_leaves_non_date_tokens_alone() {
-        let mut p = parse(&args(&["tag", "@1", "sometag"])).unwrap();
-        let range = p.take_range().unwrap();
-        assert_eq!(range, None);
-        assert_eq!(p.tags(), &["sometag".to_string()]);
-    }
-
-    #[test]
-    fn take_range_with_no_remaining_tokens_is_none() {
-        let mut p = parse(&args(&["summary"])).unwrap();
-        assert_eq!(p.take_range().unwrap(), None);
-    }
-
-    #[test]
-    fn remaining_tags_after_range_consumed() {
-        let mut p = parse(&args(&[
-            "track",
-            "2026-10-01T09:00:00Z",
-            "-",
-            "2026-10-01T10:00:00Z",
-            "alpha",
-            "beta",
-        ]))
-        .unwrap();
-        p.take_range().unwrap();
-        assert_eq!(p.tags(), &["alpha".to_string(), "beta".to_string()]);
+    fn ranges() {
+        let now = make_local(2025, 3, 5, 12, 0, 0);
+        let r = |w: &[&str]| cli(w).range(Range::new(1, 2), now);
+        assert_eq!(r(&["export"]).unwrap(), Range::new(1, 2));
+        assert_eq!(r(&["export", ":all"]).unwrap(), Range::empty());
+        assert_eq!(
+            r(&["export", "2025-03-01", "-", "2025-03-03"]).unwrap(),
+            Range::new(make_local(2025, 3, 1, 0, 0, 0), make_local(2025, 3, 3, 0, 0, 0))
+        );
+        assert_eq!(
+            r(&["export", "2025-03-01"]).unwrap(),
+            Range::new(make_local(2025, 3, 1, 0, 0, 0), make_local(2025, 3, 2, 0, 0, 0))
+        );
+        assert_eq!(r(&["export", "from", "2025-03-01"]).unwrap(), Range::new(make_local(2025, 3, 1, 0, 0, 0), 0));
+        assert_eq!(r(&["export", "1h", "ago"]).unwrap(), Range::new(now - 3600, 0));
+        assert_eq!(r(&["export", "1h"]).unwrap(), Range::new(now - 3600, now));
+        assert_eq!(
+            r(&["export", "2025-03-01T08:00", "for", "2h"]).unwrap(),
+            Range::new(make_local(2025, 3, 1, 8, 0, 0), make_local(2025, 3, 1, 10, 0, 0))
+        );
+        assert!(r(&["export", "2025-03-03", "-", "2025-03-01"]).is_err());
+        assert!(r(&["export", ":week", "2025-03-01"]).is_err());
     }
 }

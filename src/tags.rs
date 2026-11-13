@@ -73,6 +73,11 @@ impl TagsDatabase {
         }
     }
 
+    /// An empty database that will be written to `path`.
+    pub fn empty(path: impl Into<PathBuf>) -> Self {
+        TagsDatabase { path: path.into(), counts: BTreeMap::new(), modified: true }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -138,10 +143,7 @@ impl TagsDatabase {
             fs::create_dir_all(parent)?;
         }
 
-        let json = self.to_json();
-        let tmp_path = self.path.with_extension("data.tmp");
-        fs::write(&tmp_path, &json)?;
-        fs::rename(&tmp_path, &self.path)?;
+        crate::datafile::atomic_write(&self.path, &self.to_json())?;
 
         self.modified = false;
         Ok(())

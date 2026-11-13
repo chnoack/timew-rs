@@ -8,66 +8,79 @@ The repository is a Cargo workspace with two crates:
 timew-rs/                    crate "timew-rs" (workspace root)
 ├── Cargo.toml               package + [workspace] members = ["timew-tui"]
 ├── src/
-│   ├── lib.rs               library root: re-exports every module
-│   ├── main.rs              the timew-rs CLI (thin: parse args, dispatch)
-│   ├── cli.rs               argument classification
-│   ├── datetime.rs          ISO date parsing and :hint expansion
-│   ├── range.rs             half-open time ranges
-│   ├── interval.rs          one tracked interval + its .data line format
-│   ├── datafile.rs          one YYYY-MM.data file
-│   ├── database.rs          all datafiles + ID assignment
+│   ├── main.rs              the timew-rs binary: calls timew_rs::run, prints
+│   ├── lib.rs               startup: hints, paths, configuration, database
+│   ├── cli.rs               classifies arguments; the range grammar
+│   ├── session.rs           one run: database + config + journal + output
+│   ├── validate.rs          overlaps (:adjust) and :fill
+│   ├── commands/            one module per command (dispatch in mod.rs)
+│   ├── datetime.rs          date parsing, local calendar math, range hints
+│   ├── duration.rs          duration parsing and formats
+│   ├── range.rs             half-open time ranges and range arithmetic
+│   ├── interval.rs          one interval: .data line and JSON forms
+│   ├── datafile.rs          one YYYY-MM.data file; atomic writes
+│   ├── database.rs          all datafiles + tags.data; IDs
 │   ├── tags.rs              tags.data (tag -> usage count)
-│   ├── journal.rs           undo.data (placeholder)
-│   ├── validate.rs          overlap / :adjust logic (placeholder)
-│   └── commands/            one module per command
-│       ├── export.rs  get.rs  summary.rs  tags.rs      (implemented)
-│       └── track.rs start.rs stop.rs …                 (placeholders)
+│   ├── journal.rs           undo.data
+│   ├── rules.rs             timewarrior.cfg: defaults, parsing, editing
+│   ├── paths.rs             where config and data live; first-run setup
+│   ├── exclusion.rs         exclusions and holidays
+│   ├── extensions.rs        extension reports (running scripts)
+│   ├── table.rs             column layout for the text reports
+│   ├── composite.rs         layered text for the charts
+│   ├── color.rs             color specifications -> ANSI codes
+│   └── text.rs              widths, wrapping, quoting, JSON strings
+├── tests/cli.rs             end-to-end tests of the binary
 └── timew-tui/               crate "timew-tui"
     ├── Cargo.toml           depends on timew-rs (path = ".."), ratatui, jiff
     └── src/main.rs          the whole TUI (state, input, drawing, tests)
 ```
 
-The `timew-rs` crate builds both a **library** (`src/lib.rs`) and the
-**`timew-rs` binary** (`src/main.rs`). `timew-tui` uses only the library.
-Keeping the TUI in its own crate means `ratatui` is never compiled into
-`timew-rs`.
+The `timew-rs` crate builds a **library** and the **`timew-rs` binary**.
+`timew-tui` uses only the library, and only for reading. Keeping the TUI in
+its own crate means `ratatui` is never compiled into `timew-rs`.
 
 Dependencies are deliberately few:
 
 | Crate | Used for |
 | --- | --- |
 | `jiff` | Time zones, local-time calendar math, ISO week numbers |
-| `serde`, `serde_json` | `tags.data` and JSON output |
+| `serde`, `serde_json` | Reading JSON (`tags.data`, `import`, the undo journal) |
+| `unicode-width` | Display width of characters in tables and charts |
 | `ratatui` (TUI only) | Terminal UI widgets; its bundled `crossterm` handles terminal input/output |
 
-## Layers
+## One run of `timew-rs`
 
 ```
-            timew-rs (CLI)                     timew-tui
-   main.rs → cli::parse → commands::*      App (state) → draw / on_key / on_mouse
-                    │                                │
-                    ▼                                ▼
-        commands::{export,get,summary,tags}   commands::summary::build
-                    │                                │
-                    └──────────────┬─────────────────┘
-                                   ▼
-                     database::Database  ── tags::TagsDatabase
-                                   │
-                         datafile::Datafile  (one per YYYY-MM.data)
-                                   │
-                interval::Interval ── range::Range ── datetime
+main.rs ── timew_rs::run(args)
+             │
+             ├─ cli::Cli::parse            hints such as :yes, :quiet, :color
+             ├─ paths::Paths::initialize   create directories / config file if missing
+             ├─ rules::Rules::load         defaults + timewarrior.cfg (+ hints, rc.* overrides)
+             ├─ database::Database::open_and_repair   rebuild tags.data if needed
+             ├─ extensions::Extensions::load          extension names become commands
+             ├─ cli::Cli::parse            again, now knowing the extensions
+             └─ commands::dispatch(&mut Session)
+                    │  reads:   session.tracked*, exclusions, rules
+                    │  writes:  session.add / delete / modify  (journal + "new tag" notes)
+                    └─ on success: database.commit()   (datafiles, tags.data)
 ```
 
-1. **Storage** (`datafile`, `tags`): read and write files, nothing else.
-2. **Model** (`range`, `interval`, `datetime`): pure data and parsing, no I/O.
-3. **Database** (`database`): combines all datafiles, answers queries
-   (`all_tracked`, `tracked_in_range`, `tracked_by_ids`, `latest`), and
-   assigns IDs.
-4. **Commands** (`commands::*`): each takes a `&mut Database` plus the
-   parsed arguments and **returns the output as a `String`**. Commands never
-   print; `main.rs` does. This keeps them testable and lets the TUI reuse
-   them.
-5. **Front ends**: the CLI (`src/main.rs`) and the TUI (`timew-tui`).
+- **Output** is collected in `Session::out` and printed when the command
+  is done (or before a confirmation question). Errors are returned as
+  `Err(String)`, printed to stderr, and give exit status 255; on an error
+  the database is not committed.
+- **`Session`** is the only place that changes intervals: `add`, `delete`
+  and `modify` record each change in the undo journal and print the "new
+  tag" notes. Commands that change something call `journal.start()` and
+  `journal.end()` around their changes.
+- **Reading** goes through `Session::tracked()` (all intervals with IDs,
+  newest first), `tracked_in(range, tags)` and `tracked_ids(ids)` (both
+  oldest first). These include the synthetic pieces of a running interval
+  (see below).
+- **`validate::auto_adjust`** is called before every add of an interval
+  that could overlap. It stops a running interval when a new one starts,
+  and either rejects overlaps or, with `:adjust`, resolves them.
 
 ### The summary as structured data
 
@@ -77,8 +90,8 @@ Dependencies are deliberately few:
   the grand total. Each `Row` holds the text of every cell (week, date, day,
   ID, tags, annotation, start, end, time, daily total) plus `source`, the
   index of the `Tracked` it came from.
-- `format_table` turns those rows into the exact text that `timew summary`
-  prints.
+- `summary::render` lays the rows out as the `timew summary` table, with
+  the columns the configuration asks for.
 
 The CLI uses both. The TUI uses only `build`, then draws the rows in a
 ratatui `Table` and uses `source` to find the full interval for the details
@@ -87,28 +100,19 @@ the same `source`.
 
 ## Invariants the code relies on
 
-These are the non-obvious rules. They are explained in detail in the doc
-comments of the modules listed.
-
 | Invariant | Where |
 | --- | --- |
-| **IDs are never stored.** `@1` is the most recent interval, `@2` the one before it, and so on. They are recomputed on every read, so an ID can refer to a different interval after the data changes. | `database.rs` |
+| **IDs are never stored.** `@1` is the most recent interval, `@2` the one before it, and so on. They are recomputed on every read, so an ID can refer to a different interval after the data changes. | `database.rs`, `session.rs` |
 | Datafile names sort lexicographically in chronological order, and lines within a file are kept sorted as strings. Since timestamps have a fixed width, string order is time order. | `database.rs`, `datafile.rs` |
-| An interval is stored in the file of the month it **starts** in, even if it ends in a later month. | `database.rs` |
-| Timestamps are stored in UTC. Range hints (`:day`, `:month`, …), day boundaries in the summary, and displayed times use **local time** (system tzdata via `jiff`), so DST is handled correctly. | `datetime.rs`, `summary.rs` |
-| Weeks start on **Monday**. Week numbers are **ISO 8601** (for example, 2026-12-31 is W53). | `datetime.rs`, `summary.rs` |
+| An interval is stored in the file of the (local) month it **starts** in, even if it ends in a later month. | `database.rs`, `interval.rs` |
+| Every line written is parsed back and compared before it is added. | `datafile.rs` |
+| Timestamps are stored in UTC. Range hints, day boundaries and displayed times use **local time** (system tzdata via `jiff`), so DST is handled correctly. | `datetime.rs` |
+| Weeks start on **Monday**. Week numbers are **ISO 8601** (for example, 2026-12-31 is W53). | `datetime.rs` |
 | Ranges are half-open `[start, end)`. `end == 0` means open, either an interval that is still running or a range with no upper bound. | `range.rs` |
-| Tags are kept sorted and deduplicated per interval, which also fixes the order in exports. | `interval.rs` |
-| A tag filter with several tags matches only intervals that have **all** of them. | `commands/export.rs`, `commands/summary.rs` |
-
-## Database location
-
-| Program | Rule |
-| --- | --- |
-| `timew-rs` | `$TIMEWARRIORDB` only (exits with an error otherwise) |
-| `timew-tui` | `$TIMEWARRIORDB`, else `~/.timewarrior` if that directory exists, else `$XDG_DATA_HOME/timewarrior`, else `~/.local/share/timewarrior` (the same order as Timewarrior's `paths.cpp`) |
-
-Both then read `<root>/data/`.
+| Tags are kept sorted and deduplicated per interval, which also fixes the order in files and exports. | `interval.rs` |
+| A tag filter with several tags matches only intervals that have **all** of them. | `session.rs` |
+| Stored intervals never overlap (unless the file was edited by hand). | `validate.rs` |
+| A running interval spanning exclusions is shown as *synthetic* pieces, but stored as one interval; commands that change intervals store the pieces first (`Session::flatten_latest`). | `session.rs` |
 
 ## Testing
 
@@ -116,30 +120,43 @@ Both then read `<root>/data/`.
 cargo test --workspace
 ```
 
-- **Library and CLI (136 tests):** unit tests in each module. Many assert
-  against output **captured from the real `timew` binary** in a sandbox
-  (`TIMEWARRIORDB=<tmp> timew …`), so formatting is checked byte for byte.
-  Tests that need a database create a throwaway one under the system temp
-  directory.
-- **TUI (16 tests):** the UI is drawn into ratatui's in-memory
-  `TestBackend`, and the tests inspect the resulting screen text. Key
-  presses and mouse clicks are simulated by calling `App::on_key` and
-  `App::on_mouse` directly, so no real terminal is needed. To see the
-  screens a test draws:
+- **Library (unit tests in each module):** date and duration parsing,
+  range arithmetic, the configuration parser, colors, table layout, the
+  journal, the database files.
+- **Command line (`tests/cli.rs`):** runs the `timew-rs` binary in
+  throwaway databases (with `TZ=Europe/Berlin`, 80 columns) and compares
+  output and files with what the original `timew` produced for the same
+  commands.
+- **TUI:** the UI is drawn into ratatui's in-memory `TestBackend`, and the
+  tests inspect the resulting screen text. Key presses and mouse clicks
+  are simulated by calling `App::on_key` and `App::on_mouse` directly.
+  To see the screens a test draws:
 
   ```sh
   cargo test -p timew-tui -- --nocapture --test-threads=1 wide_window
   ```
 
+### Timewarrior's own test suite
+
+`timew-rs` also passes the Python test suite of the original project
+(`test/*.t` in the Timewarrior repository; the exceptions are tests that
+fail for the original too, such as those needing installed man pages).
+The suite runs `../../src/timew` relative to its `basetest` directory, so
+point that at `timew-rs`:
+
+```sh
+cp -r ~/src/timewarrior/test ~/src/timewarrior/ext /tmp/tw/   # test/ and ext/
+mkdir -p /tmp/tw/src && ln -s $PWD/target/release/timew-rs /tmp/tw/src/timew
+cd /tmp/tw/test && for t in *.t; do python3 $t; done 2>&1 | grep -E '^(ok|not ok)'
+```
+
 ## Extending
 
-- **A new CLI command:** add `commands/<name>.rs` with
-  `pub fn run(&mut Database, …) -> Result<String, String>`, register it in
-  `commands/mod.rs`, and add a match arm in `src/main.rs`.
-- **Anything that writes data:** `Database::add_interval`, `delete_interval`,
-  `modify_interval` and `commit` exist, and datafile writes are atomic
-  (written to a temporary file, then renamed over the original). Overlap
-  handling (`validate.rs`) and the undo journal (`journal.rs`) are still
-  placeholders and must be done before any write command can be trusted.
+- **A new command:** add `commands/<name>.rs` with
+  `pub fn run(s: &mut Session) -> Result<i32, String>`, register it in
+  `commands/mod.rs` (`dispatch`) and add its name to `cli::COMMANDS`.
+- **Changing data:** use `Session::add`/`delete`/`modify` between
+  `s.journal.start()` and `s.journal.end()`, and call
+  `validate::auto_adjust` before adding an interval that might overlap.
 - **The TUI** reads only through `Database::open`, `all_tracked`,
   `tracked_in_range` and `summary::build`. It has no code that writes.

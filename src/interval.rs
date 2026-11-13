@@ -30,6 +30,8 @@
 use std::fmt::Write as _;
 
 use crate::range::{Epoch, Range};
+pub use crate::text::quote_if_needed;
+use crate::text::{escape, json_encode};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Interval {
@@ -137,12 +139,12 @@ impl Interval {
                     if i > 0 {
                         out.push(',');
                     }
-                    write!(out, "\"{}\"", json_escape(tag)).unwrap();
+                    write!(out, "\"{}\"", json_encode(tag)).unwrap();
                 }
                 out.push(']');
             }
             if let Some(annotation) = &self.annotation {
-                write!(out, ",\"annotation\":\"{}\"", json_escape(annotation)).unwrap();
+                write!(out, ",\"annotation\":\"{}\"", json_encode(annotation)).unwrap();
             }
         }
 
@@ -161,6 +163,40 @@ impl Interval {
     /// matching that leniency matters because hand-edited / foreign-written
     /// `.data` files exist in practice (we hit exactly this with imported
     /// data).
+    /// Read an interval from its JSON form (as written by `to_json`, by
+    /// `export` and in the undo journal). Returns the interval and its id
+    /// (0 if absent). An empty string is the empty interval.
+    pub fn from_json(json: &str) -> Result<(Interval, u32), String> {
+        if json.trim().is_empty() {
+            return Ok((Interval::default(), 0));
+        }
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("Invalid JSON: {e}"))?;
+        Self::from_json_value(&value)
+    }
+
+    pub fn from_json_value(value: &serde_json::Value) -> Result<(Interval, u32), String> {
+        let obj = value.as_object().ok_or_else(|| "Expected a JSON object for an interval.".to_string())?;
+        let mut interval = Interval::default();
+        let time = |key: &str| -> Result<Epoch, String> {
+            match obj.get(key).and_then(|v| v.as_str()) {
+                Some(s) => crate::datetime::parse_point(s).ok_or_else(|| format!("'{s}' is not a valid date.")),
+                None => Ok(0),
+            }
+        };
+        interval.range.start = time("start")?;
+        interval.range.end = time("end")?;
+        if let Some(tags) = obj.get("tags").and_then(|v| v.as_array()) {
+            for tag in tags {
+                if let Some(t) = tag.as_str() {
+                    interval.add_tag(t);
+                }
+            }
+        }
+        interval.annotation = obj.get("annotation").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+        let id = obj.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        Ok((interval, id))
+    }
+
     pub fn parse(line: &str) -> Result<Option<Interval>, String> {
         let line = line.trim();
         if line.is_empty() {
@@ -214,14 +250,13 @@ impl Interval {
 /// to route an interval to the right file by its **start** timestamp
 /// (matches `Database::addInterval`'s use of `interval.start.year()` /
 /// `.month()`).
+/// Year and month (local time) of the datafile an interval starting at
+/// `epoch` belongs in.
 pub fn year_month_of(epoch: Epoch) -> (i64, u32) {
-    let (y, mo, ..) = civil_from_epoch(epoch);
-    (y, mo)
+    let z = crate::datetime::local(epoch);
+    (z.year() as i64, z.month() as u32)
 }
 
-/// Format a Unix epoch as the compact UTC ISO form `YYYYMMDDTHHMMSSZ`.
-/// Hand-rolled (no external datetime crate) since this is the only format
-/// ever needed for on-disk/JSON timestamps.
 pub fn format_iso(epoch: Epoch) -> String {
     let (y, mo, d, h, mi, s) = civil_from_epoch(epoch);
     format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")
@@ -287,60 +322,6 @@ fn civil_from_epoch(epoch: Epoch) -> (i64, u32, u32, u32, u32, u32) {
     let mi = ((secs_of_day % 3600) / 60) as u32;
     let s = (secs_of_day % 60) as u32;
     (y, mo, d, h, mi, s)
-}
-
-/// Backslash-escape every occurrence of `c` in `input`. Port of
-/// `escape()` in `util.cpp`.
-fn escape(input: &str, c: char) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch == c {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// Port of `quoteIfNeeded()` in `util.cpp`: wrap in double quotes (escaping
-/// any embedded `"`) if the tag contains a `"`, a space, or any character
-/// from `-+/()<^!=~_%`. Public because `commands::get` reuses it for
-/// rendering `dom.tags`/`dom.tracked.*.tags` listings the same way
-/// `joinQuotedIfNeeded` does in the C++ source.
-pub fn quote_if_needed(input: &str) -> String {
-    const OPERATOR_CHARS: &[char] = &['-', '+', '/', '(', ')', '<', '^', '!', '=', '~', '_', '%'];
-
-    let needs_quoting =
-        input.contains('"') || input.contains(' ') || input.chars().any(|c| OPERATOR_CHARS.contains(&c));
-
-    if !needs_quoting {
-        return input.to_string();
-    }
-
-    let body = if input.contains('"') { escape(input, '"') } else { input.to_string() };
-
-    format!("\"{body}\"")
-}
-
-/// Minimal JSON string escaping for the fields we emit (tags, annotation).
-/// Matches the character classes `json::encode` in the C++ source handles
-/// for ordinary text: `"`, `\`, and control characters.
-fn json_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                write!(out, "\\u{:04x}", c as u32).unwrap();
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// Tokenize a serialized interval line into words, honoring double-quoted

@@ -19,7 +19,7 @@ data contains future entries.
 
 ```sh
 export TIMEWARRIORDB=$PWD/examples/pm-2025
-./target/release/timew-rs summary :lastyear | tail -1     # 2086:35:00
+./target/release/timew-rs summary :lastyear | tail -2     # 2086:35:00
 ```
 
 ## What the data looks like
@@ -67,7 +67,9 @@ python3 examples/generate_pm_data.py --year 2024 --out /tmp/pm-2024 --tz Europe/
 | `--multi` | `0.15` | The chance of an extra tag per entry. `0` gives one tag per entry. The extra tags use their own random sequence, so changing this keeps the times and main tags the same. |
 
 The script needs only Python 3.10+ (it uses `zoneinfo` and `X | None` type hints) and no extra packages.
-It writes `timewarrior.cfg` (empty), `data/YYYY-MM.data` and
+It writes `timewarrior.cfg` (with the two settings a new Timewarrior
+database starts with, which turn on the ID and annotation columns of
+`summary`), `data/YYYY-MM.data` and
 `data/tags.data`, then prints the number of working days, the number of
 entries (and how many have several tags), the average per day, and the hours
 per tag.
