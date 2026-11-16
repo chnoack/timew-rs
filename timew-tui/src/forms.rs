@@ -33,18 +33,19 @@ pub(crate) struct StartForm {
 }
 
 impl StartForm {
-    /// The rest of a known tag that completes the tag being typed.
-    pub(crate) fn suggestion(&self, known: &[(String, usize)]) -> Option<String> {
+    /// A known tag that completes the tag being typed.
+    pub(crate) fn suggestion(&self, known: &[(String, usize)]) -> Option<Completion> {
         if self.field != 0 || !self.suggest {
             return None;
         }
         tag_completion(&self.fields[0], self.cursor, known)
     }
 
-    /// Take the suggestion: append it to the tags.
-    pub(crate) fn accept(&mut self, suggestion: &str) {
-        suggestion.chars().for_each(|c| self.insert(c));
+    /// Take the suggestion: the typed tag becomes the known one.
+    pub(crate) fn accept(&mut self, completion: &Completion) {
+        self.cursor = completion.apply(&mut self.fields[0]);
         self.suggest = false;
+        self.error = None;
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -164,13 +165,42 @@ pub(crate) fn parse_tags(text: &str) -> Result<Vec<String>, String> {
     Ok(tags)
 }
 
-/// Completion for the tag typed at the end of a tags field: the rest of
-/// the most used tag in `known` (tag and number of entries) that starts
-/// with it, or `None`. Only when the cursor is at the end of `text`; tags
-/// already in the field are not suggested again. A tag with a space or a
-/// quote is only suggested inside an opening quote, and then the closing
-/// quote is part of the completion.
-pub(crate) fn tag_completion(text: &str, cursor: usize, known: &[(String, usize)]) -> Option<String> {
+/// A suggested tag for the tags field: it replaces the tag being typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Completion {
+    /// The known tag, as it is stored.
+    pub(crate) tag: String,
+    /// Where the typed tag starts in the field (a character index, after an
+    /// opening quote).
+    start: usize,
+    /// What replaces the typed tag: the known tag (escaped, with the closing
+    /// quote inside a quote).
+    replacement: String,
+    /// The part of the replacement beyond what was typed, shown after the
+    /// cursor (empty when only the case differs).
+    pub(crate) rest: String,
+}
+
+impl Completion {
+    /// Put the known tag in place of the typed one in `field`; returns the
+    /// new cursor position (the end).
+    fn apply(&self, field: &mut String) -> usize {
+        let mut chars: Vec<char> = field.chars().take(self.start).collect();
+        chars.extend(self.replacement.chars());
+        chars.truncate(MAX_TEXT_LEN);
+        *field = chars.iter().collect();
+        chars.len()
+    }
+}
+
+/// Completion for the tag typed at the end of a tags field: the most used
+/// tag in `known` (tag and number of entries) that starts with it,
+/// ignoring case, or `None`. Only when the cursor is at the end of `text`.
+/// If the typed text is a known tag exactly, only longer tags are
+/// suggested. Tags already in the field (in any case) are not suggested
+/// again. A tag with a space or a quote is only suggested inside an opening
+/// quote, and then the closing quote is part of the completion.
+pub(crate) fn tag_completion(text: &str, cursor: usize, known: &[(String, usize)]) -> Option<Completion> {
     if cursor != text.chars().count() {
         return None;
     }
@@ -179,18 +209,33 @@ pub(crate) fn tag_completion(text: &str, cursor: usize, known: &[(String, usize)
     if prefix.is_empty() {
         return None;
     }
-    let present = parse_tags(&text[..start]).unwrap_or_default();
-    known
+    let typed = prefix.chars().count();
+    let exact = known.iter().any(|(tag, _)| tag == prefix);
+    let present: Vec<String> = parse_tags(&text[..start]).unwrap_or_default().iter().map(|t| t.to_lowercase()).collect();
+    let (tag, _) = known
         .iter()
-        .filter(|(tag, _)| tag.starts_with(prefix) && (tag.len() > prefix.len() || quoted))
+        // inside a quote, a complete tag still gets its closing quote
+        .filter(|(tag, _)| starts_with_ignoring_case(tag, prefix) && (tag != prefix || quoted))
+        .filter(|(tag, _)| !exact || tag.chars().count() > typed || tag == prefix)
         .filter(|(tag, _)| quoted || !tag.contains([' ', '"']))
-        .filter(|(tag, _)| !present.contains(tag))
+        .filter(|(tag, _)| !present.contains(&tag.to_lowercase()))
         // the most used; among equally used ones the first by name
-        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
-        .map(|(tag, _)| {
-            let rest = &tag[prefix.len()..];
-            if quoted { format!("{}\"", rest.replace('"', "\\\"")) } else { rest.to_string() }
-        })
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?;
+    let escape = |s: &str| if quoted { format!("{}\"", s.replace('"', "\\\"")) } else { s.to_string() };
+    let start_chars = text[..start].chars().count() + usize::from(quoted);
+    Some(Completion {
+        tag: tag.clone(),
+        start: start_chars,
+        replacement: escape(tag),
+        rest: escape(&tag.chars().skip(typed).collect::<String>()),
+    })
+}
+
+/// Whether `tag` starts with `prefix`, ignoring case (character by
+/// character, so the rest of `tag` is what follows `prefix`'s length).
+fn starts_with_ignoring_case(tag: &str, prefix: &str) -> bool {
+    let mut chars = tag.chars();
+    prefix.chars().all(|p| chars.next().is_some_and(|c| c == p || c.to_lowercase().eq(p.to_lowercase())))
 }
 
 /// Where the last tag in `text` starts (a byte index), and whether it is
@@ -251,18 +296,19 @@ impl EditForm {
         self.fields[self.field].chars().count()
     }
 
-    /// The rest of a known tag that completes the tag being typed.
-    pub(crate) fn suggestion(&self, known: &[(String, usize)]) -> Option<String> {
+    /// A known tag that completes the tag being typed.
+    pub(crate) fn suggestion(&self, known: &[(String, usize)]) -> Option<Completion> {
         if self.field != TAGS || !self.suggest {
             return None;
         }
         tag_completion(&self.fields[TAGS], self.cursor, known)
     }
 
-    /// Take the suggestion: append it to the tags.
-    pub(crate) fn accept(&mut self, suggestion: &str) {
-        suggestion.chars().for_each(|c| self.type_char(c));
+    /// Take the suggestion: the typed tag becomes the known one.
+    pub(crate) fn accept(&mut self, completion: &Completion) {
+        self.cursor = completion.apply(&mut self.fields[TAGS]);
         self.suggest = false;
+        self.error = None;
     }
 
     /// Go to field `i`, with the cursor at its start (or end).

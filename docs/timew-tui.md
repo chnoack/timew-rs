@@ -208,10 +208,19 @@ rest of a known tag appears in dark gray after the cursor while you type:
 Tags         meetings pl|anning
 ```
 
-- `Tab`, `→` or `End` takes the suggestion; typing on ignores it.
+- `Tab`, `→` or `End` takes the suggestion; typing on ignores it. The
+  hint line under the fields names the suggested tag.
 - The suggestion is the **most used** tag in the whole database that
-  starts with what you typed (case matters, as in Timewarrior). Tags that
-  are already in the field are not suggested again.
+  starts with what you typed, **ignoring case**. Taking it replaces what
+  you typed with the tag as it is stored: with a tag `ABC`, typing `ab`,
+  `aB` or `abc` gives `ABC` (Timewarrior itself treats `ABC` and `abc` as
+  different tags, so this keeps you from creating a second spelling). If
+  only the case differs, nothing appears after the cursor, but the hint
+  line shows the tag.
+- If what you typed is a known tag exactly, other spellings of it are not
+  suggested, only longer tags. Tags that are already in the field (in any
+  spelling) are not suggested again. Characters other than letters must
+  match exactly.
 - It only appears right after typing a character with the cursor at the
   end of the field. Moving the cursor or switching fields hides it, so
   `Tab` and `→` keep their usual meaning there.

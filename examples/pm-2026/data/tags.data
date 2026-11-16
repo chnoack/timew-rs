@@ -2,9 +2,9 @@
   "budget":{"count":234},
   "email":{"count":374},
   "meetings":{"count":583},
-  "planning":{"count":406},
-  "reporting":{"count":294},
-  "risks":{"count":239},
+  "planning":{"count":405},
+  "reporting":{"count":293},
+  "risks":{"count":238},
   "stakeholders":{"count":353},
   "team":{"count":358}
 }

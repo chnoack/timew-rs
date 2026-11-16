@@ -227,7 +227,8 @@ A separate program for browsing the summary interactively:
   after asking, optionally giving its time to the previous entry. Overlaps are refused, or adjusted with
   Shift+Enter (or Alt+Enter), and `u` undoes the last edit.
 - **Tag completion:** in both forms, known tags are suggested while you
-  type (the most used first); `Tab` or `→` takes the suggestion.
+  type, ignoring case (the most used first); `Tab` or `→` takes the
+  suggestion in the tag's stored spelling.
 
 Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/timew-tui.md).
 

@@ -17,7 +17,7 @@ use crate::app::App;
 use crate::filter::{Filter, MONTH_NAMES};
 use crate::format::{format_hm, local_date, local_datetime, local_moment};
 use crate::forms::DeleteDialog;
-use crate::ui::{ACCENT, FOCUS, PAD, text_field};
+use crate::ui::{ACCENT, FOCUS, PAD, suggestion_hint, text_field};
 
 pub(crate) fn draw_year_picker(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(p) = &mut app.year_picker else { return };
@@ -187,12 +187,12 @@ pub(crate) fn draw_start_form(frame: &mut Frame, area: Rect, app: &mut App) {
     let field = |i: usize| {
         let skip = if i == form.field { form.scroll } else { 0 };
         let text: String = form.fields[i].chars().skip(skip).take(visible).collect();
-        let rest = if i == form.field { suggestion.as_deref() } else { None };
+        let rest = if i == form.field { suggestion.as_ref().map(|c| c.rest.as_str()) } else { None };
         text_field(text, rest, field_w as usize, i == form.field)
     };
     let last = match &form.error {
         Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
-        None if suggestion.is_some() => Line::styled("Tab or → takes the suggested tag", Style::new().dim()),
+        None if suggestion.is_some() => Line::styled(suggestion_hint(suggestion.as_ref()), Style::new().dim()),
         None if form.field == 0 => Line::styled("separated by spaces, \"in quotes\" with spaces", Style::new().dim()),
         None => Line::styled("any text, may be empty", Style::new().dim()),
     };

@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use crate::app::App;
 use crate::format::{format_hm, local_datetime};
 use crate::forms::{ANNOTATION, EDIT_FIELD_WIDTHS, TAGS, is_text};
-use crate::ui::{ACCENT, FOCUS, PAD, text_field};
+use crate::ui::{ACCENT, FOCUS, PAD, suggestion_hint, text_field};
 
 pub(crate) fn draw_details(frame: &mut Frame, area: Rect, app: &mut App) {
     if app.edit.is_some() {
@@ -108,7 +108,7 @@ fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
         if is_text(i) {
             let skip = if i == form.field { form.scroll } else { 0 };
             let text: String = form.fields[i].chars().skip(skip).take(visible).collect();
-            let rest = if i == form.field { suggestion.as_deref() } else { None };
+            let rest = if i == form.field { suggestion.as_ref().map(|c| c.rest.as_str()) } else { None };
             return text_field(text, rest, tags_w as usize, i == form.field);
         }
         let style = if form.field == i { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
@@ -121,7 +121,7 @@ fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let last = match &form.error {
         Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
-        None if suggestion.is_some() => Line::styled("Tab or → takes the suggested tag", Style::new().dim()),
+        None if suggestion.is_some() => Line::styled(suggestion_hint(suggestion.as_ref()), Style::new().dim()),
         None if form.field == TAGS => Line::styled("separated by spaces, \"in quotes\" with spaces", Style::new().dim()),
         None if form.field == ANNOTATION => Line::styled("any text; empty removes the annotation", Style::new().dim()),
         None if iv.is_open() => Line::styled("YYYY-MM-DD  HH:MM · empty end: still tracking", Style::new().dim()),

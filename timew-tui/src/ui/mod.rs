@@ -16,6 +16,7 @@ use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 use crate::app::{App, Button};
 use crate::filter::Filter;
 use crate::format::range_label;
+use crate::forms::{Completion, tags_to_text};
 use crate::ui::chart::{chart_height, draw_chart, tag_totals};
 use crate::ui::details::draw_details;
 use crate::ui::footer::{draw_help, draw_messages, draw_status, messages_height};
@@ -33,6 +34,13 @@ pub(crate) const FOCUS: Color = Color::Yellow;
 /// A suggested tag after the text of a field (dark gray on the active
 /// field's light background).
 pub(crate) const SUGGESTION: Color = Color::DarkGray;
+
+/// The hint under a tags field with a suggestion; it names the tag, which
+/// shows its case even when only the case differs from what was typed.
+pub(crate) fn suggestion_hint(completion: Option<&Completion>) -> String {
+    let tag = completion.map(|c| tags_to_text(std::slice::from_ref(&c.tag))).unwrap_or_default();
+    format!("Tab or → takes the suggested tag {tag}")
+}
 
 /// A one-line text field `width` cells wide: a space, the visible `text`,
 /// then the suggested completion (if any, as far as it fits), padded.

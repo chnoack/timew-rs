@@ -10,8 +10,21 @@ fn known() -> Vec<(String, usize)> {
         .collect()
 }
 
+/// What appears after the cursor for `text`.
 fn complete(text: &str) -> Option<String> {
-    tag_completion(text, text.chars().count(), &known())
+    tag_completion(text, text.chars().count(), &known()).map(|c| c.rest)
+}
+
+/// The field after taking the suggestion for `text`, with `known` tags.
+fn accepted(text: &str, known: &[(&str, usize)]) -> Option<String> {
+    let known: Vec<(String, usize)> = known.iter().map(|(t, c)| (t.to_string(), *c)).collect();
+    let completion = tag_completion(text, text.chars().count(), &known)?;
+    let mut form = crate::forms::StartForm { suggest: true, ..Default::default() };
+    form.fields[0] = text.to_string();
+    form.cursor = text.chars().count();
+    form.accept(&completion);
+    assert_eq!(form.cursor, form.fields[0].chars().count(), "the cursor ends up at the end");
+    Some(form.fields[0].clone())
 }
 
 #[test]
@@ -32,6 +45,37 @@ fn no_completion_when_nothing_fits() {
     assert_eq!(complete("meetings me").as_deref(), Some("ta"), "meetings is already there, meta is next");
     assert_eq!(complete("meetings meta email m"), None, "both m-tags are already there");
     assert_eq!(tag_completion("me", 1, &known()), None, "only with the cursor at the end");
+}
+
+#[test]
+fn case_is_ignored_and_the_stored_case_is_used() {
+    for typed in ["ab", "AB", "aB", "abc", "ABC", "Abc"] {
+        for tag in ["ABC", "Abc", "aBc"] {
+            // typed exactly as stored: nothing to complete
+            let expected = (typed != tag).then(|| tag.to_string());
+            assert_eq!(accepted(typed, &[(tag, 1)]), expected, "{typed} → {tag}");
+        }
+    }
+    assert_eq!(accepted("email ab", &[("ABC", 1)]).as_deref(), Some("email ABC"), "only the last tag changes");
+    assert_eq!(accepted("\"Deep W", &[("deep work", 1)]).as_deref(), Some("\"deep work\""));
+    // shown after the cursor: the rest in the stored case; nothing if only the case differs
+    let known = vec![("ABC".to_string(), 1)];
+    let c = tag_completion("ab", 2, &known).unwrap();
+    assert_eq!((c.tag.as_str(), c.rest.as_str()), ("ABC", "C"));
+    assert_eq!(tag_completion("abc", 3, &known).unwrap().rest, "");
+}
+
+#[test]
+fn case_variants_choose_by_use_and_respect_exact_tags() {
+    let known = [("ABC", 1), ("abc", 3), ("Abc", 2)];
+    assert_eq!(accepted("a", &known).as_deref(), Some("abc"), "the most used spelling");
+    // typed exactly as a known tag: other spellings are not offered, longer tags are
+    assert_eq!(accepted("ABC", &known), None);
+    assert_eq!(accepted("ABC", &[("ABC", 1), ("abc", 3), ("abcd", 1)]).as_deref(), Some("abcd"));
+    // a tag already in the field, in any case, is not offered again
+    assert_eq!(accepted("abc a", &[("ABC", 1)]), None);
+    // characters that are not letters must match exactly
+    assert_eq!(accepted("a-", &[("a_b", 1)]), None);
 }
 
 #[test]
