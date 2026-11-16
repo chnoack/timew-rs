@@ -42,7 +42,17 @@ timew-rs/                    the repository
 │   └── tests/cli.rs         end-to-end tests of the binary
 ├── timew-tui/               program "timew-tui": the terminal UI
 │   ├── Cargo.toml           depends on timew-core, ratatui, jiff
-│   └── src/main.rs          the whole TUI (state, input, drawing, tests)
+│   ├── src/
+│   │   ├── main.rs          entry point: database location, event loop
+│   │   ├── app.rs           state (App), filters, selection, scrolling
+│   │   ├── input.rs         keys and mouse
+│   │   ├── entries.rs       edit, start, stop, delete, undo
+│   │   ├── filter.rs        filters, date range form, month/year lists
+│   │   ├── forms.rs         edit, start and delete dialogs
+│   │   ├── format.rs        dates, times, durations for display
+│   │   ├── ui/              drawing: mod.rs (layout), table, details, chart, popups, footer
+│   │   └── tests/           tests by topic
+│   └── tests/version.rs     runs the binary (--version)
 └── examples/
     ├── generate-pm-data/    program "generate-pm-data": example data (depends on jiff only)
     └── pm-2025/, pm-2026/   the generated example databases

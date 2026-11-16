@@ -344,7 +344,24 @@ Invalid input shows a red error in the form, which stays open.
 
 ## Implementation
 
-Everything is in `timew-tui/src/main.rs`.
+The code is in `timew-tui/src/`, split by responsibility:
+
+| File | Contents |
+| --- | --- |
+| `main.rs` | Finding the database, terminal setup, the event loop, `--version` |
+| `app.rs` | The `App` state: loading, the selection, filters, pickers, scrolling |
+| `input.rs` | Keyboard and mouse: what each key and click does, per dialog |
+| `entries.rs` | Changing data: edit, start, stop, delete, undo (through `timew-core`) |
+| `filter.rs` | The filters, the date range form, the month and year lists |
+| `forms.rs` | The edit form, the start form and the delete dialog, and parsing what is typed |
+| `format.rs` | Dates, times, durations and ranges for display |
+| `ui/mod.rs` | `draw`: the layout, header, filter bar, shared colors and paddings |
+| `ui/table.rs` | The summary table: columns, week colors, gap lines |
+| `ui/details.rs` | The details panel and the edit form in it |
+| `ui/chart.rs` | The hours-per-tag chart |
+| `ui/popups.rs` | Lists, forms, the delete dialog, the info dialog and the key legend |
+| `ui/footer.rs` | The messages panel, the status line and the help line |
+| `tests/` | The tests, by topic (`filters`, `layout`, `chart`, `help`, `edit`, `tracking`), with shared helpers in `tests/mod.rs`; `timew-tui/tests/version.rs` runs the binary |
 
 ### State
 
@@ -423,7 +440,7 @@ are reported on stderr after the terminal has been restored.
 
 ### Tests
 
-The tests draw into ratatui's `TestBackend` (usually 100×24, or 140 columns
+The tests (in `src/tests/`) draw into ratatui's `TestBackend` (usually 100×24, or 140 columns
 for the wide layout) and simulate input by calling `on_key` and `on_mouse`.
 The sample database has three intervals: yesterday 08–12 *planning*, today
 08–10 *meetings* and 10–11 *email*. It is generated relative to the current
