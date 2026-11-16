@@ -2747,6 +2747,11 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
 }
 
 fn main() -> std::process::ExitCode {
+    // like `timew-cli --version`: just the version, no terminal setup
+    if std::env::args().skip(1).eq(["--version"]) {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return std::process::ExitCode::SUCCESS;
+    }
     let db_root = match resolve_db_root() {
         Ok(p) => p,
         Err(e) => {

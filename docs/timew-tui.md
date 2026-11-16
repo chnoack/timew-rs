@@ -9,6 +9,7 @@ ever changed.
 ```sh
 cargo build --release -p timew-tui
 ./target/release/timew-tui
+./target/release/timew-tui --version     # prints the version and exits
 ```
 
 ## Which database it opens
