@@ -11,11 +11,11 @@ that data and correcting start and end times.
 > `undo`. It passes Timewarrior's own test suite (apart from the `undo`
 > tests). `timew-tui` browses the data and can edit entries.
 
-![timew-tui showing November 2026 of the example data](docs/images/timew-tui.png)
+![timew-tui showing November 2026 of the example data](docs/images/timew-tui.jpg)
 
 *timew-tui showing November 2026 of the example data (`./examples/pm-2026`).*
 
-![timew-cli showing a summary and a week chart of the example data](docs/images/timew-cli.png)
+![timew-cli showing a summary and a week chart of the example data](docs/images/timew-cli.jpg)
 
 *timew-cli with the same data: `summary` of one day with IDs, and the `week` chart.*
 
