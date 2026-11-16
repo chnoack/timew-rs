@@ -15,6 +15,10 @@ that data and correcting start and end times.
 
 *timew-tui showing November 2026 of the example data (`./examples/pm-2026`).*
 
+![timew-cli showing a summary and a week chart of the example data](docs/images/timew-cli.png)
+
+*timew-cli with the same data: `summary` of one day with IDs, and the `week` chart.*
+
 ## Contents
 
 | Path | What it is |
