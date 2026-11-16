@@ -105,8 +105,9 @@ the running one otherwise. The help line shows `s start` or `s stop`.
 
 - **Start:** a dialog asks for the **tags** (separated by spaces,
   `"in quotes"` with spaces) and an **annotation** (any text); both may be
-  empty. `Tab`/`↑↓` switch between them, `Enter` starts the entry now,
-  `Esc` cancels. Afterwards the view switches to **today** (a tag filter
+  empty. While you type a tag, a known tag is suggested (see
+  [Tag completion](#tag-completion)). `Tab`/`↑↓` switch between the
+  fields, `Enter` starts the entry now, `Esc` cancels. Afterwards the view switches to **today** (a tag filter
   the new entry doesn't match is dropped), the new entry is selected and its
   details are open (in a narrow window, the panel below the table).
 - **Stop:** the running entry ends now. The view and the filters stay as
@@ -167,7 +168,8 @@ table):
   space in double quotes (`"client a" meetings`). Typing inserts at the
   cursor; a long line scrolls sideways. `↑` from the start date or
   `Shift+Tab` gets there; an empty field removes all tags. New tags are
-  added to `tags.data` like with `timew-cli tag`.
+  added to `tags.data` like with `timew-cli tag`. Known tags are suggested
+  while you type (see [Tag completion](#tag-completion)).
 - **Annotation** is a plain text field too (`↑` from the start date gets
   there). Any text is fine, including quotes; leading and trailing spaces
   are dropped, and an empty field removes the annotation.
@@ -196,6 +198,25 @@ table):
   same and works everywhere.
 - `Esc` cancels without changing anything. While the form is open, all
   keys go to it.
+
+### Tag completion
+
+In the tags field of the start dialog (`s`) and the edit form (`e`), the
+rest of a known tag appears in dark gray after the cursor while you type:
+
+```
+Tags         meetings pl|anning
+```
+
+- `Tab`, `→` or `End` takes the suggestion; typing on ignores it.
+- The suggestion is the **most used** tag in the whole database that
+  starts with what you typed (case matters, as in Timewarrior). Tags that
+  are already in the field are not suggested again.
+- It only appears right after typing a character with the cursor at the
+  end of the field. Moving the cursor or switching fields hides it, so
+  `Tab` and `→` keep their usual meaning there.
+- A tag with a space needs quotes: after `"de`, `"deep work"` is suggested,
+  including the closing quote.
 
 ### Hours-per-tag chart
 

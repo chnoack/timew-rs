@@ -2,6 +2,7 @@
 //! and check what is drawn, on throwaway databases.
 
 mod chart;
+mod completion;
 mod edit;
 mod filters;
 mod help;

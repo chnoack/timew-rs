@@ -28,9 +28,25 @@ pub(crate) struct StartForm {
     /// First visible character of the active field (it scrolls sideways).
     pub(crate) scroll: usize,
     pub(crate) error: Option<String>,
+    /// The last key typed a character, so a tag may be suggested.
+    pub(crate) suggest: bool,
 }
 
 impl StartForm {
+    /// The rest of a known tag that completes the tag being typed.
+    pub(crate) fn suggestion(&self, known: &[(String, usize)]) -> Option<String> {
+        if self.field != 0 || !self.suggest {
+            return None;
+        }
+        tag_completion(&self.fields[0], self.cursor, known)
+    }
+
+    /// Take the suggestion: append it to the tags.
+    pub(crate) fn accept(&mut self, suggestion: &str) {
+        suggestion.chars().for_each(|c| self.insert(c));
+        self.suggest = false;
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.fields[self.field].chars().count()
     }
@@ -80,6 +96,8 @@ pub(crate) struct EditForm {
     /// annotation scroll sideways).
     pub(crate) scroll: usize,
     pub(crate) error: Option<String>,
+    /// The last key typed a character, so a tag may be suggested.
+    pub(crate) suggest: bool,
 }
 
 /// Index of the tags field; the fields from here on are free text.
@@ -146,6 +164,59 @@ pub(crate) fn parse_tags(text: &str) -> Result<Vec<String>, String> {
     Ok(tags)
 }
 
+/// Completion for the tag typed at the end of a tags field: the rest of
+/// the most used tag in `known` (tag and number of entries) that starts
+/// with it, or `None`. Only when the cursor is at the end of `text`; tags
+/// already in the field are not suggested again. A tag with a space or a
+/// quote is only suggested inside an opening quote, and then the closing
+/// quote is part of the completion.
+pub(crate) fn tag_completion(text: &str, cursor: usize, known: &[(String, usize)]) -> Option<String> {
+    if cursor != text.chars().count() {
+        return None;
+    }
+    let (start, quoted) = last_word(text)?;
+    let prefix = if quoted { &text[start + 1..] } else { &text[start..] };
+    if prefix.is_empty() {
+        return None;
+    }
+    let present = parse_tags(&text[..start]).unwrap_or_default();
+    known
+        .iter()
+        .filter(|(tag, _)| tag.starts_with(prefix) && (tag.len() > prefix.len() || quoted))
+        .filter(|(tag, _)| quoted || !tag.contains([' ', '"']))
+        .filter(|(tag, _)| !present.contains(tag))
+        // the most used; among equally used ones the first by name
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(tag, _)| {
+            let rest = &tag[prefix.len()..];
+            if quoted { format!("{}\"", rest.replace('"', "\\\"")) } else { rest.to_string() }
+        })
+}
+
+/// Where the last tag in `text` starts (a byte index), and whether it is
+/// an open quote. `None` if `text` ends between tags or with a closed
+/// quote.
+fn last_word(text: &str) -> Option<(usize, bool)> {
+    let (mut start, mut in_quote, mut escaped) = (0, false, false);
+    for (i, c) in text.char_indices() {
+        if in_quote {
+            if c == '"' && !escaped {
+                in_quote = false;
+            }
+            escaped = c == '\\' && !escaped;
+        } else if c.is_whitespace() {
+            start = i + c.len_utf8();
+        } else if c == '"' && i == start {
+            in_quote = true;
+        }
+    }
+    let quoted = text[start..].starts_with('"');
+    if start == text.len() || (quoted && !in_quote) {
+        return None;
+    }
+    Some((start, quoted))
+}
+
 fn is_separator(c: char) -> bool {
     c == '-' || c == ':'
 }
@@ -163,11 +234,35 @@ impl EditForm {
             tags_to_text(&iv.tags),
             iv.annotation.clone().unwrap_or_default(),
         ];
-        EditForm { original: iv.clone(), id: t.id, initial: fields.clone(), fields, field: 0, cursor: 0, scroll: 0, error: None }
+        EditForm {
+            original: iv.clone(),
+            id: t.id,
+            initial: fields.clone(),
+            fields,
+            field: 0,
+            cursor: 0,
+            scroll: 0,
+            error: None,
+            suggest: false,
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
         self.fields[self.field].chars().count()
+    }
+
+    /// The rest of a known tag that completes the tag being typed.
+    pub(crate) fn suggestion(&self, known: &[(String, usize)]) -> Option<String> {
+        if self.field != TAGS || !self.suggest {
+            return None;
+        }
+        tag_completion(&self.fields[TAGS], self.cursor, known)
+    }
+
+    /// Take the suggestion: append it to the tags.
+    pub(crate) fn accept(&mut self, suggestion: &str) {
+        suggestion.chars().for_each(|c| self.type_char(c));
+        self.suggest = false;
     }
 
     /// Go to field `i`, with the cursor at its start (or end).

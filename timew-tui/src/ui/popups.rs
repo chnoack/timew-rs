@@ -17,7 +17,7 @@ use crate::app::App;
 use crate::filter::{Filter, MONTH_NAMES};
 use crate::format::{format_hm, local_date, local_datetime, local_moment};
 use crate::forms::DeleteDialog;
-use crate::ui::{ACCENT, FOCUS, PAD};
+use crate::ui::{ACCENT, FOCUS, PAD, text_field};
 
 pub(crate) fn draw_year_picker(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(p) = &mut app.year_picker else { return };
@@ -182,22 +182,24 @@ pub(crate) fn draw_start_form(frame: &mut Frame, area: Rect, app: &mut App) {
         form.scroll = form.cursor + 1 - visible;
     }
     let form = &*form;
+    let suggestion = form.suggestion(&app.all_tags);
     let label = |s: &'static str| Span::styled(format!("{s:<w$}", w = LABEL_W as usize), Style::new().fg(ACCENT).bold());
     let field = |i: usize| {
-        let style = if form.field == i { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
         let skip = if i == form.field { form.scroll } else { 0 };
         let text: String = form.fields[i].chars().skip(skip).take(visible).collect();
-        Span::styled(format!(" {:<w$}", text, w = (field_w as usize).saturating_sub(1)), style)
+        let rest = if i == form.field { suggestion.as_deref() } else { None };
+        text_field(text, rest, field_w as usize, i == form.field)
     };
     let last = match &form.error {
         Some(err) => Line::styled(err.clone(), Style::new().fg(Color::Red).bold()),
+        None if suggestion.is_some() => Line::styled("Tab or → takes the suggested tag", Style::new().dim()),
         None if form.field == 0 => Line::styled("separated by spaces, \"in quotes\" with spaces", Style::new().dim()),
         None => Line::styled("any text, may be empty", Style::new().dim()),
     };
     let lines = vec![
-        Line::from(vec![label("Tags"), field(0)]),
+        Line::from([vec![label("Tags")], field(0)].concat()),
         Line::raw(""),
-        Line::from(vec![label("Annotation"), field(1)]),
+        Line::from([vec![label("Annotation")], field(1)].concat()),
         Line::raw(""),
         Line::styled("The entry starts now.", Style::new().dim()),
         last,

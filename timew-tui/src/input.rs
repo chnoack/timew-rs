@@ -12,6 +12,13 @@ use crate::forms::{FIELDS, is_text};
 impl App {
     fn on_edit_key(&mut self, key: KeyEvent) {
         let Some(form) = &mut self.edit else { return };
+        if let Some(suggestion) = form.suggestion(&self.all_tags)
+            && accepts_suggestion(key)
+        {
+            form.accept(&suggestion);
+            return;
+        }
+        let typed = typed_char(key);
         match key.code {
             KeyCode::Esc => self.edit = None,
             KeyCode::Tab | KeyCode::Down => form.focus(form.field + 1, false),
@@ -39,6 +46,9 @@ impl App {
             KeyCode::Enter => self.save_edit(false),
             _ => {}
         }
+        if let Some(form) = &mut self.edit {
+            form.suggest = typed;
+        }
     }
 
     fn on_delete_key(&mut self, key: KeyEvent) {
@@ -52,6 +62,13 @@ impl App {
 
     fn on_start_key(&mut self, key: KeyEvent) {
         let Some(form) = &mut self.start_form else { return };
+        if let Some(suggestion) = form.suggestion(&self.all_tags)
+            && accepts_suggestion(key)
+        {
+            form.accept(&suggestion);
+            return;
+        }
+        let typed = typed_char(key);
         match key.code {
             KeyCode::Esc => self.start_form = None,
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => form.focus(form.field + 1),
@@ -71,6 +88,9 @@ impl App {
             KeyCode::Char(c) => form.insert(c),
             KeyCode::Enter => self.start_entry(),
             _ => {}
+        }
+        if let Some(form) = &mut self.start_form {
+            form.suggest = typed;
         }
     }
 
@@ -391,4 +411,14 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Tab, → and End take a suggested tag.
+fn accepts_suggestion(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Tab | KeyCode::Right | KeyCode::End) && key.modifiers.is_empty()
+}
+
+/// Whether `key` types a character (so a tag may be suggested after it).
+fn typed_char(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }

@@ -226,6 +226,8 @@ A separate program for browsing the summary interactively:
   annotation of the selected entry in the details panel; `d` deletes it
   after asking, optionally giving its time to the previous entry. Overlaps are refused, or adjusted with
   Shift+Enter (or Alt+Enter), and `u` undoes the last edit.
+- **Tag completion:** in both forms, known tags are suggested while you
+  type (the most used first); `Tab` or `→` takes the suggestion.
 
 Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/timew-tui.md).
 

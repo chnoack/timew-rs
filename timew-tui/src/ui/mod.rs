@@ -9,7 +9,7 @@ pub(crate) mod table;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 
@@ -29,6 +29,27 @@ pub(crate) const ACCENT: Color = Color::Cyan;
 
 /// Border of the view that has the keyboard focus.
 pub(crate) const FOCUS: Color = Color::Yellow;
+
+/// A suggested tag after the text of a field (dark gray on the active
+/// field's light background).
+pub(crate) const SUGGESTION: Color = Color::DarkGray;
+
+/// A one-line text field `width` cells wide: a space, the visible `text`,
+/// then the suggested completion (if any, as far as it fits), padded.
+/// The active field is drawn reversed, the others underlined.
+pub(crate) fn text_field(text: String, suggestion: Option<&str>, width: usize, active: bool) -> Vec<Span<'static>> {
+    let style = if active { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new().underlined() };
+    let mut used = 1 + text.chars().count();
+    let mut spans = vec![Span::styled(format!(" {text}"), style)];
+    if let Some(rest) = suggestion {
+        // reversed, so the background color is what shows as the text color
+        let rest: String = rest.chars().take(width.saturating_sub(used + 1)).collect();
+        used += rest.chars().count();
+        spans.push(Span::styled(rest, style.bg(SUGGESTION)));
+    }
+    spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), style));
+    spans
+}
 
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let [header, filters, body, status, help] = Layout::vertical([
