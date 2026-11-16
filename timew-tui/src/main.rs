@@ -1484,6 +1484,26 @@ fn bar_colors(totals: &[TagTotal]) -> Vec<(Color, Color)> {
         .collect()
 }
 
+/// Color of the line that marks a gap between two entries of a day.
+const GAP_COLOR: Color = Color::Indexed(244);
+
+/// For each summary row: whether there is untracked time between it and
+/// the next row of the same day. Never after the last row of a day (or of
+/// the list), and not after a running entry.
+fn gap_after(app: &App) -> Vec<bool> {
+    let rows = &app.summary.rows;
+    (0..rows.len())
+        .map(|i| {
+            let Some(next) = rows.get(i + 1) else { return false };
+            if next.date.is_some() {
+                return false; // the next row starts another day
+            }
+            let (this, next) = (&app.tracked[rows[i].source].interval, &app.tracked[next.source].interval);
+            this.range.is_ended() && this.range.end < next.range.start
+        })
+        .collect()
+}
+
 /// For each summary row, 0 or 1: flips whenever the ISO week (week-year +
 /// week number) of the row's day changes, so consecutive weeks alternate.
 /// Rows without a date belong to the day (and week) of the row above.
@@ -1523,12 +1543,31 @@ fn draw(frame: &mut Frame, app: &mut App) {
     let table_w = table_width(&app.summary).max(summary_title(app).width() as u16 + 4);
     app.wide = body.width >= table_w + DETAILS_MIN_WIDTH;
     let has_selection = app.selected().is_some();
+    // Outside the side column (narrow window, or nothing selected), a
+    // message gets its own panel below everything else in the body.
+    let mut body = body;
+    if !(app.wide && has_selection) && app.notice.is_some() {
+        let h = messages_height(app, body.width);
+        let [rest, messages] = Layout::vertical([Constraint::Min(3), Constraint::Length(h)]).areas(body);
+        draw_messages(frame, messages, app);
+        body = rest;
+    }
     if app.wide && has_selection {
-        // wide: table at its natural width; on the right the details, with the chart below
+        // wide: table at its natural width; on the right the details, the
+        // chart below them, and a message (if any) at the bottom
         let [table, side] = Layout::horizontal([Constraint::Length(table_w), Constraint::Min(DETAILS_MIN_WIDTH)]).areas(body);
         draw_summary(frame, table, app);
-        let [details, chart] = Layout::vertical([Constraint::Length(DETAILS_HEIGHT), Constraint::Min(0)]).areas(side);
+        let messages_h = if app.notice.is_some() { messages_height(app, side.width) } else { 0 };
+        let [details, chart, messages] = Layout::vertical([
+            Constraint::Length(DETAILS_HEIGHT),
+            Constraint::Min(0),
+            Constraint::Length(messages_h),
+        ])
+        .areas(side);
         draw_details(frame, details, app);
+        if app.notice.is_some() {
+            draw_messages(frame, messages, app);
+        }
         // the chart needs room for its frame, padding and at least one bar
         if chart.height >= 3 + PAD.top + PAD.bottom {
             draw_chart(frame, chart, app);
@@ -2355,6 +2394,7 @@ fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
         .style(Style::new().bold().underlined());
 
     let weeks = week_parity(&app.summary.rows);
+    let gaps = gap_after(app);
     let mut day_index = 0usize;
     let rows = all.into_iter().enumerate().map(|(i, cells)| {
         if i > 0 && app.summary.rows[i].date.is_some() {
@@ -2384,6 +2424,37 @@ fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
     app.table_area = area;
     frame.render_stateful_widget(table, area, &mut app.table);
 
+    // A gap before the next entry of the same day: a thin dashed grey line
+    // under the row, from the Tags column to the Total column (underlined
+    // segments of two columns, one column apart).
+    let inner = Rect::new(
+        area.x + 1 + PAD.left,
+        area.y + 1 + PAD.top,
+        area.width.saturating_sub(2 + PAD.left + PAD.right),
+        area.height.saturating_sub(2 + PAD.top + PAD.bottom),
+    );
+    let first_row_y = inner.y + 1; // below the header
+    // columns are laid out from the left with one column of spacing
+    let column_x = |c: usize| inner.x + widths[..c].iter().map(|w| *w as u16 + 1).sum::<u16>();
+    let line_from = column_x(3);
+    let line_to = (column_x(7) + widths[7] as u16).min(inner.right());
+    let offset = app.table.offset();
+    let buf = frame.buffer_mut();
+    for (i, gap) in gaps.iter().enumerate().skip(offset) {
+        let y = first_row_y + (i - offset) as u16;
+        if y >= inner.bottom() {
+            break;
+        }
+        if !gap {
+            continue;
+        }
+        for x in line_from..line_to {
+            if (x - line_from) % 3 != 2 {
+                buf[(x, y)].set_style(Style::new().underlined().underline_color(GAP_COLOR));
+            }
+        }
+    }
+
     if app.summary.rows.len() <= app.page {
         return;
     }
@@ -2395,16 +2466,30 @@ fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 }
 
+/// Height of the messages panel for an area `width` columns wide: the
+/// message wrapped to the panel (at least one line, at most three).
+fn messages_height(app: &App, width: u16) -> u16 {
+    let inner = width.saturating_sub(2 + PAD.left + PAD.right).max(1) as usize;
+    let text = app.notice.as_deref().map_or(1, |n| n.chars().count().div_ceil(inner));
+    text.clamp(1, 3) as u16 + 2 + PAD.top + PAD.bottom
+}
+
+/// The messages panel: the result of the last action (green, or red if it
+/// failed), until the next key. Only shown while there is a message.
+fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(notice) = &app.notice else { return };
+    let color = if app.notice_failed { Color::Red } else { Color::Green };
+    let line = Line::styled(notice.clone(), Style::new().fg(color).bold());
+    let block = Block::bordered().border_type(BorderType::Rounded).title(" Messages ").padding(PAD);
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(line).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);
+}
+
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let days = app.summary.rows.iter().filter(|r| r.date.is_some()).count();
     let intervals = app.summary.rows.len();
     let total = app.summary.grand_total;
     let avg = if days > 0 { format!("{} h", decimal_hours(total / days as i64)) } else { "-".into() };
-    if let Some(notice) = &app.notice {
-        let color = if app.notice_failed { Color::Red } else { Color::Green };
-        frame.render_widget(Paragraph::new(Line::styled(format!(" {notice}"), Style::new().fg(color).bold())), area);
-        return;
-    }
     let pos = match app.table.selected() {
         Some(i) if intervals > 0 => format!("row {}/{}", i + 1, intervals),
         _ => String::new(),
@@ -2425,8 +2510,9 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool, running: bool) {
-    let mut items: Vec<(&str, &str)> = Vec::new();
-    // first, so that they are visible in a narrow window too
+    // "? help" (the full key legend) always comes first; then the actions,
+    // so that they are visible in a narrow window too
+    let mut items: Vec<(&str, &str)> = vec![("?", "help")];
     items.push(("s", if running { "stop" } else { "start" }));
     if can_undo {
         // first, so that it is visible in a narrow window too
@@ -2445,14 +2531,10 @@ fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool, running:
     items.extend([("e", "edit"), ("d", "delete")]);
     items.extend([("PgUp/Dn", "page"), ("r", "reload"), ("i", "info")]);
 
-    // Keep "q quit" at the end. If not everything fits, put "? help" (the
-    // full key legend) first and drop items from the end until it fits.
+    // Keep "q quit" at the end; if not everything fits, drop items from
+    // the end (the legend lists them all).
     let width = |k: &str, l: &str| k.chars().count() + 1 + l.chars().count() + 2;
-    let all: usize = items.iter().map(|(k, l)| width(k, l)).sum();
     let tail = [("q", "quit")];
-    if 1 + all + width("q", "quit") > area.width as usize {
-        items.insert(0, ("?", "help"));
-    }
     let tail_w: usize = tail.iter().map(|(k, l)| width(k, l)).sum();
     let mut room = (area.width as usize).saturating_sub(1 + tail_w);
     let mut spans = vec![Span::raw(" ")];
@@ -3537,12 +3619,12 @@ mod tests {
     }
 
     #[test]
-    fn footer_offers_help_only_when_cut_off() {
+    fn footer_always_starts_with_help() {
         let root = sample_db("footer-help");
         let mut app = App::new(root.clone());
         let footer = |app: &mut App, w| render_at(app, w, 34).lines().last().unwrap().to_string();
         let wide = footer(&mut app, 140);
-        assert!(wide.contains("r reload") && !wide.contains("? help"), "{wide}");
+        assert!(wide.starts_with(" ? help  ") && wide.contains("r reload"), "{wide}");
         for w in [20u16, 40, 60, 90] {
             let narrow = footer(&mut app, w);
             assert!(narrow.starts_with(" ? help  ") && narrow.ends_with("q quit"), "width {w}: {narrow}");
@@ -3874,7 +3956,7 @@ mod tests {
         // two edits: meetings ends 09:30, then it ends 10:30 adjusting email
         edit_end(&mut app, "0930", false);
         let first = today_file(&root);
-        assert!(footer(&mut app).starts_with(" s start  u undo  "), "{}", footer(&mut app));
+        assert!(footer(&mut app).starts_with(" ? help  s start  u undo  "), "{}", footer(&mut app));
         edit_end(&mut app, "1030", true);
         assert!(today_file(&root).contains(&format!("inc {} - {} # email", today_at(10, 30), today_at(11, 0))));
 
@@ -4048,7 +4130,7 @@ mod tests {
         press(&mut app, '4');
         app.tag = Some("planning".into());
         app.load();
-        assert!(footer(&mut app).starts_with(" s start "), "{}", footer(&mut app));
+        assert!(footer(&mut app).starts_with(" ? help  s start "), "{}", footer(&mut app));
 
         press(&mut app, 's');
         assert!(render_at(&mut app, 140, 24).contains("Start tracking"));
@@ -4071,7 +4153,7 @@ mod tests {
         let screen = render_at(&mut app, 140, 24);
         assert!(screen.contains("Entry details · running") && screen.contains("Started"), "{screen}");
         assert_eq!(panel_border(&mut app, "Entry details"), Color::Red, "running: red border");
-        assert!(footer(&mut app).starts_with(" s stop "));
+        assert!(footer(&mut app).starts_with(" ? help  s stop "));
 
         // a stopped entry has the normal border
         press(&mut app, '2');
@@ -4098,14 +4180,14 @@ mod tests {
         let stopped = app.selected().unwrap().interval.clone();
         assert!(stopped.is_ended() && stopped.range.start == started.range.start, "the stopped entry stays selected");
         assert!(render_at(&mut app, 140, 24).contains("Stopped after"));
-        assert!(footer(&mut app).starts_with(" s start "));
+        assert!(footer(&mut app).starts_with(" ? help  s start "));
         assert_ne!(panel_border(&mut app, "Entry details"), Color::Red);
         assert!(!all_lines(&root).contains(&format!("inc {} # work\n", timew_core::interval::format_iso(started.range.start))));
 
         // u undoes the stop: running again
         press(&mut app, 'u');
         assert!(all_lines(&root).contains(&format!("inc {} # work\n", timew_core::interval::format_iso(started.range.start))));
-        assert!(footer(&mut app).starts_with(" s stop "));
+        assert!(footer(&mut app).starts_with(" ? help  s stop "));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4209,6 +4291,159 @@ mod tests {
         press(&mut app, 'e');
         assert!(app.confirm_delete.is_some(), "still asking");
         press(&mut app, 'n');
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn messages_have_their_own_panel() {
+        let root = sample_db("messages");
+        let mut app = App::new(root.clone());
+        app.config_dir = root.clone();
+        press(&mut app, '1');
+        let status = |screen: &str| screen.lines().rev().nth(1).unwrap().to_string();
+        // wide: no message, no panel (the chart gets the room)
+        let screen = render_at(&mut app, 140, 34);
+        assert!(!screen.contains("Messages"));
+        edit_end(&mut app, "0930", false);
+        let screen = render_at(&mut app, 140, 34);
+        println!("{screen}");
+        let messages = screen.lines().position(|l| l.contains("Messages")).unwrap();
+        let chart = screen.lines().position(|l| l.contains("Hours per tag")).unwrap();
+        assert!(messages > chart, "below the chart");
+        assert!(screen.lines().nth(messages + 2).unwrap().contains("Saved."));
+        assert!(status(&screen).starts_with(" Total "), "the status line keeps the totals: {}", status(&screen));
+        // narrow: a panel below the list, only while there is a message
+        press(&mut app, 'u');
+        let screen = render_at(&mut app, 90, 24);
+        println!("{screen}");
+        assert!(screen.contains("Messages") && screen.contains("Undone."));
+        assert!(status(&screen).starts_with(" Total "));
+        press(&mut app, 'j');
+        assert!(!render_at(&mut app, 90, 24).contains("Messages"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    /// Screen column where `text` starts on line `y`.
+    fn col_of(buf: &ratatui::buffer::Buffer, y: u16, text: &str) -> u16 {
+        let chars: Vec<char> = text.chars().collect();
+        (0..buf.area.width)
+            .find(|&x| chars.iter().enumerate().all(|(i, c)| x + (i as u16) < buf.area.width && buf[(x + i as u16, y)].symbol() == c.to_string()))
+            .unwrap_or_else(|| panic!("'{text}' not on line {y}"))
+    }
+
+    #[test]
+    fn gaps_within_a_day_are_marked_with_a_line() {
+        // yesterday: a 08-09, gap, b 09:30-10, c 10-11 (no gap), today: d 08-09, gap, e 10-11
+        let root = env::temp_dir().join(format!("timew-tui-test-gaps-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data")).unwrap();
+        let tz = jiff::tz::TimeZone::system();
+        let today = jiff::Zoned::now().date();
+        let yesterday = today.yesterday().unwrap();
+        let at = |d: jiff::civil::Date, h: i8, m: i8| {
+            timew_core::interval::format_iso(d.at(h, m, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second())
+        };
+        let mut lines: Vec<(jiff::civil::Date, String)> = [
+            (yesterday, (8, 0), (9, 0), "a"),
+            (yesterday, (9, 30), (10, 0), "b"),
+            (yesterday, (10, 0), (11, 0), "c"),
+            (today, (8, 0), (9, 0), "d"),
+            (today, (10, 0), (11, 0), "e"),
+        ]
+        .iter()
+        .map(|(d, (h1, m1), (h2, m2), t)| (*d, format!("inc {} - {} # {t}", at(*d, *h1, *m1), at(*d, *h2, *m2))))
+        .collect();
+        lines.sort();
+        for (d, line) in lines {
+            let file = root.join("data").join(format!("{:04}-{:02}.data", d.year(), d.month()));
+            let mut content = fs::read_to_string(&file).unwrap_or_default();
+            content.push_str(&line);
+            content.push('\n');
+            fs::write(file, content).unwrap();
+        }
+        let mut app = App::new(root.clone());
+        app.filter = Filter::Custom;
+        app.custom_range = Range::new(
+            yesterday.to_zoned(tz.clone()).unwrap().timestamp().as_second(),
+            today.tomorrow().unwrap().to_zoned(tz.clone()).unwrap().timestamp().as_second(),
+        );
+        app.load();
+        let tags: Vec<String> = app.summary.rows.iter().map(|r| r.tags.clone()).collect();
+        assert_eq!(tags, vec!["a", "b", "c", "d", "e"]);
+        // a|b gap; b|c touch; c is the day's last; d|e gap; e is the last
+        assert_eq!(gap_after(&app), vec![true, false, false, true, false]);
+
+        // drawn as a grey underline across the whole row
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let row_y = |tag: &str| {
+            (0..buf.area.height)
+                .find(|&y| {
+                    let line: String = (0..60).map(|x| buf[(x, y)].symbol()).collect();
+                    line.contains(&format!(" {tag}  "))
+                })
+                .unwrap()
+        };
+        // dashed, from the Tags column to the end of the Total column
+        let header_y = (0..buf.area.height).find(|&y| (0..60).map(|x| buf[(x, y)].symbol()).collect::<String>().contains("Wk  Date")).unwrap();
+        let from = col_of(&buf, header_y, "Tags");
+        let to = col_of(&buf, header_y, "Total") + "Total".len() as u16;
+        let on = |x: u16, y: u16| buf[(x, y)].modifier.contains(Modifier::UNDERLINED) && buf[(x, y)].underline_color == GAP_COLOR;
+        let underlined = |y: u16| {
+            (3..from).all(|x| !on(x, y)) && (from..to).all(|x| on(x, y) == ((x - from) % 3 != 2)) && !on(to, y)
+        };
+        assert!(underlined(row_y("a")) && underlined(row_y("d")));
+        assert!(!buf[(10, row_y("b"))].modifier.contains(Modifier::UNDERLINED));
+        assert!(!buf[(10, row_y("c"))].modifier.contains(Modifier::UNDERLINED));
+        assert!(!buf[(10, row_y("e"))].modifier.contains(Modifier::UNDERLINED));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn gap_lines_follow_scrolling() {
+        // 30 days, each 08-09 and 10-11 (a gap between them)
+        let root = env::temp_dir().join(format!("timew-tui-test-gapscroll-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data")).unwrap();
+        let tz = jiff::tz::TimeZone::system();
+        let first = jiff::civil::date(2025, 3, 1);
+        let at = |d: jiff::civil::Date, h: i8| timew_core::interval::format_iso(d.at(h, 0, 0, 0).to_zoned(tz.clone()).unwrap().timestamp().as_second());
+        let mut content = String::new();
+        for n in 0..30 {
+            let d = first.checked_add(jiff::Span::new().days(n)).unwrap();
+            content.push_str(&format!("inc {} - {} # first\ninc {} - {} # second\n", at(d, 8), at(d, 9), at(d, 10), at(d, 11)));
+        }
+        fs::write(root.join("data/2025-03.data"), content).unwrap();
+        let mut app = App::new(root.clone());
+        app.filter = Filter::Month;
+        app.month = Some((2025, 3));
+        app.load();
+        assert_eq!(app.summary.rows.len(), 60);
+        for _ in 0..41 {
+            press(&mut app, 'j');
+        }
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut checked = 0;
+        for y in 0..buf.area.height {
+            let line: String = (0..40).map(|x| buf[(x, y)].symbol()).collect();
+            let is_first = line.contains(" first ");
+            let is_second = line.contains(" second ");
+            if !(is_first || is_second) {
+                continue;
+            }
+            let tags_x = col_of(&buf, y, if is_first { "first" } else { "second" });
+            let underlined = buf[(tags_x, y)].modifier.contains(Modifier::UNDERLINED);
+            assert!(!buf[(3, y)].modifier.contains(Modifier::UNDERLINED), "not under the week");
+            assert_eq!(underlined, is_first, "row {y}: {line}");
+            checked += 1;
+        }
+        assert!(checked >= 10 && app.table.offset() > 0, "scrolled: {checked} rows, offset {}", app.table.offset());
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -1,10 +1,10 @@
 {
   "budget":{"count":234},
   "email":{"count":374},
-  "meetings":{"count":581},
+  "meetings":{"count":579},
   "planning":{"count":405},
   "reporting":{"count":293},
   "risks":{"count":238},
-  "stakeholders":{"count":352},
+  "stakeholders":{"count":351},
   "team":{"count":357}
 }

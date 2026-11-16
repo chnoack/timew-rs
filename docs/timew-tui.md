@@ -48,6 +48,12 @@ while the TUI is running. The only writes are saved edits (see
   Wk/Date/Day are **cyan and magenta, alternating each ISO week**. Every
   other day has a slightly darker background, and the daily totals are
   yellow.
+- **Gaps:** where there is untracked time between two entries of the same
+  day, a thin dashed grey line separates them: the row above the gap is
+  underlined in segments, from the Tags column to the Total column.
+  There is no line between days, before the first or after the last
+  entry, or after a running entry. (Terminals that can't color underlines
+  draw it in the text color.)
 - **Times and durations:** start, end, the per-entry Time and the duration
   in the details are hours and minutes without seconds (`8:50`, `0:30`).
   Seconds are cut off, not rounded.
@@ -55,14 +61,21 @@ while the TUI is running. The only writes are saved edits (see
   **decimal hours** with two places: 7:30 is shown as `7.50`, 8:25 as
   `8.42`. `timew-cli summary` still shows `H:MM:SS` everywhere, because its
   output matches `timew`.
-- **Help line:** shows as many keys as fit the window width, and always ends
-  with `q quit`. If some keys don't fit, it starts with `? help`, so the
-  legend is always reachable.
+- **Help line:** always starts with `? help` (the full key legend) and
+  ends with `q quit`; in between it shows as many keys as fit the window
+  width.
 - **Key legend:** `?` opens a window listing every key, mouse action and
   popup key. In a low window it scrolls (`↑↓`, `PgUp`/`PgDn`, `g`/`G`, or
   the mouse wheel). `?`, `Esc`, `q`, `Enter` or a click closes it.
 - **Status line:** the total, the number of days with entries, the number of
   rows, the average per day with entries, and your position in the list.
+  It always shows these; messages go to their own panel.
+- **Messages:** the result of the last action ("Saved.", "Deleted. u
+  undoes it.", or what went wrong, in red) is shown in the **Messages**
+  panel until the next key. The panel is only there while there is a
+  message; otherwise the view above it takes its room. In a wide window it
+  is at the bottom of the right column, below "Hours per tag"; in a narrow
+  window below the list. Long messages wrap (up to three lines).
 - **Average per day** counts only days that have entries.
 
 ### Details panel
@@ -161,12 +174,12 @@ table):
 - `Enter` saves. The change is made the way `timew-cli modify` makes it: an
   end before the start, or an overlap with another entry, is refused with
   a message in the form (which stays open). Otherwise the change is
-  written, the entry stays selected, and the status line confirms the
+  written, the entry stays selected, and the Messages panel confirms the
   save.
 - **`Shift+Enter`** saves even if the entry now overlaps others, and
   adjusts them like `timew-cli modify … :adjust`: an entry it overlaps at
   one end is shortened, one it covers completely is deleted, one it lies
-  inside is split around it. The status line says how many were adjusted,
+  inside is split around it. The message says how many were adjusted,
   and an undo reverts all of it at once.
 - **`u` undoes** the last saved edit, including any adjusted entries. Only
   the last one: after an undo (or a restart) there is nothing more to
