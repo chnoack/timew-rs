@@ -1,8 +1,19 @@
 # timew-rs
 
-A Rust implementation of [Timewarrior](https://timewarrior.net/) that uses
-the same database format, plus **timew-tui**, a terminal UI for browsing
-that data and correcting start and end times.
+timew-rs tracks your working time in the terminal. You start and stop
+tracking with tags for projects, clients or activities, record or correct
+time afterwards, and see where the time went in reports per day, week,
+month or year, as tables, charts and hours per tag. Everything is stored
+locally in plain text files.
+
+It is a Rust implementation of [Timewarrior](https://timewarrior.net/) that
+uses the same database format, so it works on an existing Timewarrior
+database. It consists of two programs:
+
+- **timew-cli:** the command line program, with the same commands and
+  output as Timewarrior's `timew`.
+- **timew-tui:** a terminal UI for browsing the data, starting and stopping
+  tracking, and editing or deleting entries.
 
 > **Status:** `timew-cli` implements all of Timewarrior's commands: tracking
 > (`start`, `stop`, `track`, `continue`, …), editing (`modify`, `move`,
