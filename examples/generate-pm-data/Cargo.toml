@@ -1,0 +1,11 @@
+[package]
+name = "generate-pm-data"
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/chnoack/timew-rs"
+license = "MIT"
+description = "Generates one year of example Timewarrior data for a project manager"
+publish = false
+
+[dependencies]
+jiff = "0.2.42"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["timew-core", "timew-cli", "timew-tui"]
+members = ["timew-core", "timew-cli", "timew-tui", "examples/generate-pm-data"]
 
 # Release builds are optimized for speed: whole-program optimization (LTO)
 # in a single codegen unit, no unwinding code (a panic ends the program

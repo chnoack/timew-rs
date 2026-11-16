@@ -2,11 +2,12 @@
 
 ## Workspace layout
 
-The repository is a Cargo workspace with three crates, one per folder:
+The repository is a Cargo workspace with three crates, one per folder,
+plus the example data generator:
 
 ```
 timew-rs/                    the repository
-├── Cargo.toml               [workspace] members = ["timew-core", "timew-cli", "timew-tui"]
+├── Cargo.toml               [workspace] members = the three crates + examples/generate-pm-data
 ├── timew-core/              library "timew_core": the shared data model
 │   ├── Cargo.toml
 │   └── src/
@@ -39,9 +40,12 @@ timew-rs/                    the repository
 │   │   ├── color.rs         color specifications -> ANSI codes
 │   │   └── extensions.rs    extension reports (running scripts)
 │   └── tests/cli.rs         end-to-end tests of the binary
-└── timew-tui/               program "timew-tui": the terminal UI
-    ├── Cargo.toml           depends on timew-core, ratatui, jiff
-    └── src/main.rs          the whole TUI (state, input, drawing, tests)
+├── timew-tui/               program "timew-tui": the terminal UI
+│   ├── Cargo.toml           depends on timew-core, ratatui, jiff
+│   └── src/main.rs          the whole TUI (state, input, drawing, tests)
+└── examples/
+    ├── generate-pm-data/    program "generate-pm-data": example data (depends on jiff only)
+    └── pm-2025/, pm-2026/   the generated example databases
 ```
 
 - **`timew-core`** holds everything both programs need: the files, the
@@ -51,6 +55,9 @@ timew-rs/                    the repository
   parsing, the commands, and their text output (tables, charts, colors).
 - **`timew-tui`** is the terminal UI on top of the same core. It doesn't
   depend on `timew-cli`, and `ratatui` is never compiled into `timew-cli`.
+- **`generate-pm-data`** writes the example databases (see
+  [example-data.md](example-data.md)). It is not published and shares no
+  code with the others.
 
 Each crate has its own version (in its `Cargo.toml`); `timew-cli
 --version` prints the CLI's, the TUI's info dialog (`i`) shows its own and

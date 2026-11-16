@@ -1,7 +1,7 @@
 # Example data
 
-`examples/generate_pm_data.py` creates one year of made-up data for a
-project manager, in a complete Timewarrior database directory. The data is
+`examples/generate-pm-data` (a small Rust program in the workspace) creates
+one year of made-up data for a project manager, in a complete Timewarrior database directory. The data is
 used for trying out both programs and as realistic test input.
 
 ## Included data
@@ -53,9 +53,9 @@ the hours add up to more than the 2,086.58 h tracked in total):
 ## Generating data
 
 ```sh
-python3 examples/generate_pm_data.py                   # 2025 → examples/pm-2025
-python3 examples/generate_pm_data.py --year 2026       # → examples/pm-2026
-python3 examples/generate_pm_data.py --year 2024 --out /tmp/pm-2024 --tz Europe/Vienna --seed 7
+cargo run -p generate-pm-data                          # 2025 → examples/pm-2025
+cargo run -p generate-pm-data -- --year 2026           # → examples/pm-2026
+cargo run -p generate-pm-data -- --year 2024 --out /tmp/pm-2024 --tz Europe/Vienna --seed 7
 ```
 
 | Option | Default | Meaning |
@@ -66,7 +66,11 @@ python3 examples/generate_pm_data.py --year 2024 --out /tmp/pm-2024 --tz Europe/
 | `--seed` | `42` | The random seed. The same seed always gives the same data. |
 | `--multi` | `0.15` | The chance of an extra tag per entry. `0` gives one tag per entry. The extra tags use their own random sequence, so changing this keeps the times and main tags the same. |
 
-The script needs only Python 3.10+ (it uses `zoneinfo` and `X | None` type hints) and no extra packages.
+It uses the same random numbers as Python's `random` module (it
+reimplements its Mersenne Twister and the methods the generator uses), so
+the data is the same as from the earlier Python version of the generator,
+and the included data sets can be reproduced exactly. The only dependency is
+`jiff`, for the time zones.
 It writes `timewarrior.cfg` (with the two settings a new Timewarrior
 database starts with, which turn on the ID and annotation columns of
 `summary`), `data/YYYY-MM.data` and
