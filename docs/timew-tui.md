@@ -279,7 +279,7 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `6` / `t` | **Tag list** |
 | `r` | Reload from disk |
 | `?` | Show the **key legend** (all keys in one window) |
-| `i` | Show the **info** dialog: the timew-tui version, the version of the `timew-core` library it uses, and the project page on GitHub. Any key or a click closes it. |
+| `i` | Show the **info** dialog: the timew-tui version, the version of the `timew-core` library it uses, the license and copyright, and the project page on GitHub. Any key or a click closes it. |
 | `Esc` | **Reset all filters**: back to the current month with all tags (a picked month or year and a date range are dropped). In the narrow layout it closes the chart or details panel first. It never quits. |
 | `q` | Quit |
 | `Ctrl+C` | Quit, from anywhere |

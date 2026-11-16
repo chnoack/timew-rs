@@ -252,6 +252,7 @@ JSON on stdin, and prints the report. `timew-cli extensions` lists them.
 | `extensions` | List extension reports. |
 | `diagnostics` | Version, files and settings, for bug reports. |
 | `help [<command> \| dates \| dom \| durations \| hints \| ranges]` | Usage; `timew-cli <command> --help` is the same as `help <command>`. Shows Timewarrior's man page if it is installed. |
+| `info` | Version, license, copyright and project page. |
 | `--version` | The version. |
 
 ## Differences from Timewarrior
@@ -282,5 +283,6 @@ These are deliberate; most fix something the original gets wrong.
 - `since` and `until` work like `from` and `to`.
 - `dom.rc.<name>` of an unset name is empty instead of an error.
 - `help <command>` without installed man pages shows the command's usage.
+- `info` is new: version, license and project page.
 - Backslashes in annotations are kept.
 - `:debug` produces no debug output.

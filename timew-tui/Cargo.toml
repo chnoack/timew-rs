@@ -1,8 +1,9 @@
 [package]
 name = "timew-tui"
-version = "0.3.0"
+version = "0.8.0"
 edition = "2024"
 repository = "https://github.com/chnoack/timew-rs"
+license = "MIT"
 description = "Terminal UI for browsing and editing a Timewarrior database"
 
 [dependencies]

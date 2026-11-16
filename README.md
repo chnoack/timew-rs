@@ -124,6 +124,19 @@ cargo install --path timew-cli   # timew-cli
 cargo install --path timew-tui   # timew-tui
 ```
 
+### Shorter names
+
+For quicker typing, create aliases in your shell configuration
+(`~/.zshrc` or `~/.bashrc`):
+
+```sh
+alias tw='timew-cli'
+alias tu='timew-tui'
+```
+
+Then `tw summary :week` and `tu` work like the full names. For fish, use
+`alias --save tw timew-cli` and `alias --save tu timew-tui`.
+
 ## Quick start with the example data
 
 The repository includes a year of generated project-manager data
@@ -217,7 +230,7 @@ Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/t
 
 ## Relationship to Timewarrior
 
-This is a clean-room reimplementation. The behavior was worked out by reading
+This is a reimplementation in Rust, not a line-by-line translation. The behavior was worked out by reading
 the Timewarrior C++ source (GothenburgBitFactory/timewarrior, `develop`
 branch, commit `3699d2e`) and its tests, and by comparing against the real
 `timew` binary. The tests in `timew-cli/tests/cli.rs` contain output captured from
@@ -226,3 +239,10 @@ for `undo`). The two
 programs share the same files, so `timew-cli` and `timew-tui` can be used on
 an existing Timewarrior database, and Timewarrior can keep using a database
 that `timew-cli` wrote to.
+
+## License
+
+MIT, see [LICENSE](LICENSE). timew-rs is based on Timewarrior, which is
+also MIT licensed; its copyright notice (Thomas Lauf, Paul Beckingham,
+Federico Hernandez) is kept in the license. `timew-cli info` and the `i`
+dialog in timew-tui show the version, license and copyright.

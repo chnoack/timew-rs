@@ -18,6 +18,7 @@ const USAGE: &[&str] = &[
     "timew get <DOM> [<DOM> ...]",
     "timew help [<command> | dates | dom | durations | hints | ranges]",
     "timew import [<file> ...]",
+    "timew info",
     "timew join @<id> @<id>",
     "timew lengthen @<id> [@<id> ...] <duration>",
     "timew modify (start|end) @<id> <date>",

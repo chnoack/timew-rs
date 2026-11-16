@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn merging() {
         assert_eq!(merge(&[r(5, 10), r(1, 6), r(20, 30)]), vec![r(1, 10), r(20, 30)]);
-        assert_eq!(subtract_all(&[r(0 + 1, 100)], &[r(10, 20), r(50, 60)]), vec![r(1, 10), r(20, 50), r(60, 100)]);
+        assert_eq!(subtract_all(&[r(1, 100)], &[r(10, 20), r(50, 60)]), vec![r(1, 10), r(20, 50), r(60, 100)]);
     }
 
     #[test]

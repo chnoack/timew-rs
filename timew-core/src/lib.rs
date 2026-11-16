@@ -34,3 +34,13 @@ pub use edit::{
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The license of timew-rs (all three crates).
+pub const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+
+/// The copyright holders, as in the `LICENSE` file: timew-rs is based on
+/// Timewarrior, whose notice is kept.
+pub const COPYRIGHT: &[&str] = &[
+    "Copyright 2026, Christian Noack",
+    "Copyright 2015 - 2023, Thomas Lauf, Paul Beckingham, Federico Hernandez (Timewarrior)",
+];

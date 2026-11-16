@@ -1,8 +1,9 @@
 [package]
 name = "timew-cli"
-version = "0.8.5"
+version = "0.9.0"
 edition = "2024"
 repository = "https://github.com/chnoack/timew-rs"
+license = "MIT"
 description = "A Rust implementation of the Timewarrior command line program"
 
 [dependencies]

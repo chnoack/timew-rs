@@ -3,6 +3,7 @@ name = "timew-core"
 version = "0.8.0"
 edition = "2024"
 repository = "https://github.com/chnoack/timew-rs"
+license = "MIT"
 description = "The Timewarrior data model shared by timew-cli and timew-tui: database, configuration, dates, overlaps, edits"
 
 [dependencies]

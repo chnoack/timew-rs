@@ -16,6 +16,7 @@ pub mod gaps;
 pub mod get;
 pub mod help;
 pub mod import;
+pub mod info;
 pub mod join;
 pub mod lengthen;
 pub mod modify;
@@ -61,6 +62,7 @@ pub fn dispatch(s: &mut Session) -> Result<i32, String> {
         "get" => get::run(s),
         "help" | "--help" | "-h" => help::run(s),
         "import" => import::run(s),
+        "info" => info::run(s),
         "join" => join::run(s),
         "lengthen" => lengthen::run(s, lengthen::Change::Lengthen),
         "shorten" => lengthen::run(s, lengthen::Change::Shorten),

@@ -2608,20 +2608,20 @@ fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         h("Other"),
         k("r", "reload from disk"),
         k("?", "this legend"),
-        k("i", "info: version and project page"),
+        k("i", "info: version, license and project page"),
         k("Esc", "reset all filters (current month, all tags)"),
         k("q", "quit"),
         k("Ctrl+C", "quit, from anywhere"),
     ]
 }
 
-/// The info dialog (`i`): version and project page.
+/// The info dialog (`i`): version, license and project page.
 fn draw_info(frame: &mut Frame, area: Rect, app: &App) {
     if !app.info {
         return;
     }
     let label = |s: &'static str| Span::styled(format!("{s:<10}"), Style::new().fg(ACCENT).bold());
-    let lines = vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("timew-tui ", Style::new().bold()),
             Span::styled(env!("CARGO_PKG_VERSION"), Style::new().fg(Color::Yellow).bold()),
@@ -2630,8 +2630,16 @@ fn draw_info(frame: &mut Frame, area: Rect, app: &App) {
         Line::raw(""),
         Line::from(vec![label("Version"), Span::raw(env!("CARGO_PKG_VERSION"))]),
         Line::from(vec![label("Library"), Span::raw(format!("timew-core {}", timew_core::VERSION))]),
-        Line::from(vec![label("Project"), Span::styled(env!("CARGO_PKG_REPOSITORY"), Style::new().fg(ACCENT).underlined())]),
+        Line::from(vec![label("License"), Span::raw(timew_core::LICENSE)]),
     ];
+    for (i, notice) in timew_core::COPYRIGHT.iter().enumerate() {
+        let label = if i == 0 { label("Copyright") } else { Span::raw(" ".repeat(10)) };
+        lines.push(Line::from(vec![label, Span::raw(notice.trim_start_matches("Copyright "))]));
+    }
+    lines.push(Line::from(vec![
+        label("Project"),
+        Span::styled(env!("CARGO_PKG_REPOSITORY"), Style::new().fg(ACCENT).underlined()),
+    ]));
     let text_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let w = (text_w + PAD.left + PAD.right + 2).max(30).min(area.width);
     let h = (lines.len() as u16 + 2 + PAD.top + 1).min(area.height);
@@ -4029,7 +4037,7 @@ mod tests {
 
 
     #[test]
-    fn i_shows_version_and_project_page() {
+    fn i_shows_version_license_and_project_page() {
         let root = sample_db("info");
         let mut app = App::new(root.clone());
         press(&mut app, '1');
@@ -4041,6 +4049,9 @@ mod tests {
         assert!(screen.contains(&format!("timew-tui {}", env!("CARGO_PKG_VERSION"))));
         assert!(screen.contains(&format!("timew-core {}", timew_core::VERSION)));
         assert!(screen.contains("https://github.com/chnoack/timew-rs"));
+        assert!(screen.contains("License   MIT"));
+        assert!(screen.contains("Copyright 2026, Christian Noack"));
+        assert!(screen.contains("2015 - 2023, Thomas Lauf, Paul Beckingham, Federico Hernandez (Timewarrior)"));
         // it takes the keys: q closes it instead of quitting
         press(&mut app, 'q');
         assert!(!app.info && !app.quit);
