@@ -15,9 +15,87 @@ that data and correcting start and end times.
 
 *timew-cli with the example data (`./examples/pm-2026`): `summary` of one day with IDs, and the `week` chart.*
 
+<details>
+<summary>Text version</summary>
+
+```
+$ timew-cli summary 2026-11-10 :ids
+
+Wk  Date       Day ID   Tags               Annotation    Start      End    Time   Total
+--- ---------- --- ---- ------------------ ---------- -------- -------- ------- -------
+W46 2026-11-10 Tue @351 budget                         8:45:00  9:45:00 1:00:00
+                   @350 stakeholders, team             9:45:00 10:00:00 0:15:00
+                   @349 risks                         10:00:00 11:30:00 1:30:00
+                   @348 meetings                      11:30:00 12:30:00 1:00:00
+                   @347 stakeholders                  12:30:00 12:45:00 0:15:00
+                   @346 meetings                      12:45:00 13:20:00 0:35:00
+                   @345 risks                         14:05:00 15:05:00 1:00:00
+                   @344 meetings, planning            15:05:00 15:50:00 0:45:00
+                   @343 reporting                     15:50:00 17:00:00 1:10:00 7:30:00
+
+                                                                                7:30:00
+
+$ timew-cli week 2026-11-09 - 2026-11-14
+
+           0    1    2    3    4    5    6    7    8    9    10   11   12   13   14   15   16   17   18   19   20   21   22   23     Total
+W46 Mon  9                                           teaemmeetingsreemai    mriteplstakemeetemai                                      7:40
+    Tue 10                                            budgestrisks  meetismee    risksmeereporti                                      7:30
+    Wed 11                                         meetings  risks  te     emamerepemreportin                                         7:25
+    Thu 12                                     risks  reportinstakeho   planning  meetsrepor                                          8:25
+    Fri 13                                       smeetibudget    mee   plannememarestakeh                                             7:35
+
+                                                                                                                                     38:35
+
+           Tracked        38:35:00
+           Available      81:25:00
+           Total         120:00:00
+```
+
+</details>
+
 ![timew-tui showing November 2026 of the example data](docs/images/timew-tui.jpg)
 
 *timew-tui with the same data, showing November 2026.*
+
+<details>
+<summary>Text version</summary>
+
+```
+ timew-tui   ./examples/pm-2026
+╭───────╮ ╭─────────────╮ ╭─────────╮ ╭────────╮ ╭─────────╮   ╭───────╮
+│ 1 Day │ │ 2 Yesterday │ │ 3 Month │ │ 4 Year │ │ 5 Range │   │ 6 Tag │
+╰───────╯ ╰─────────────╯ ╰─────────╯ ╰────────╯ ╰─────────╯   ╰───────╯
+╭ Summary · Month · 2026-11-01 – 2026-11-30 ────────────────────────────────╮╭ Entry details ──────────────────────────────────────────╮
+│                                                                           ║│                                                         │
+│  Wk  Date       Day Tags                          Start   End Time Total  █│  ID         @399                                        │
+│  W45 2026-11-02 Mon email, team                    7:15  8:15 1:00        █│  Tags        stakeholders                               │
+│                     planning                       8:15 10:00 1:45        █│  Annotation (none)                                      │
+│                     meetings, reporting           10:30 10:45 0:15        ║│                                                         │
+│                     meetings                      11:15 11:30 0:15        ║│  Day        Monday                                      │
+│                     team                          11:30 11:50 0:20        ║│  Week       W45 2026                                    │
+│                     email                         12:50 13:35 0:45        ║│  Start      2026-11-02 Mon 13:35                        │
+│                     stakeholders                  13:35 14:20 0:45        ║│  End        2026-11-02 Mon 14:20                        │
+│                     reporting                     14:20 16:20 2:00        ║│  Duration   0:45                                        │
+│                     meetings, planning            16:20 16:45 0:25  7.50  ║│                                                         │
+│  W45 2026-11-03 Tue stakeholders                   7:00  8:00 1:00        ║╰─────────────────────────────────────────────────────────╯
+│                     email, meetings                8:00  9:00 1:00        ║╭ Hours per tag ──────────────────────────────────────────╮
+│                     stakeholders                   9:00 10:00 1:00        ║│                                                         │
+│                     meetings, planning            11:30 11:45 0:15        ║│  meetings      ███████████▊██  34.00 h  +6.50 h   21 %  │
+│                     risks                         11:45 12:00 0:15        ║│  planning      ████████▎█▍     23.85 h  +6.15 h   14 %  │
+│                     planning                      12:45 13:00 0:15        ║│  stakeholders  ███████▊▌       22.29 h  +2.46 h   13 %  │
+│                     stakeholders                  13:00 15:00 2:00        ║│  team          ████████▎       20.25 h  +3.58 h   12 %  │
+│                     budget, email, planning       15:00 16:10 1:10  6.92  ║│  email         ██████▌█▎       18.85 h  +4.99 h   11 %  │
+│  W45 2026-11-04 Wed budget                         7:30  8:00 0:30        ║│  reporting     ██████▍         18.42 h  +0.50 h   11 %  │
+│                     stakeholders                   8:00 10:00 2:00        ║│  budget        █████▎▍         15.18 h  +3.15 h    9 %  │
+│                     budget, team                  10:00 10:30 0:30        ║│  risks         ████▌           13.00 h  +0.50 h    8 %  │
+│                     meetings                      10:30 12:30 2:00        ║│                                                         │
+│                     reporting                     12:30 13:30 1:00        ║│  Total 165.83 h    █ own share  █ shared (+)            │
+╰───────────────────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯
+ Total 165.83 h  ·  21 days  ·  187 intervals  ·  avg/day 7.90 h  ·  row 7/187
+ ? help  s start  ↑↓ move  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  e edit  d delete  PgUp/Dn page  r reload  i info  q quit
+```
+
+</details>
 
 ## Contents
 
