@@ -241,6 +241,9 @@ impl App {
             KeyCode::PageUp => self.scroll_by(-page),
             KeyCode::Home | KeyCode::Char('g') => self.scroll_by(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.scroll_by(isize::MAX / 2),
+            // ⇧1 ("!" on US and German keyboards): the day of the selected entry
+            KeyCode::Char('!') => self.pick_day(),
+            KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::SHIFT) => self.pick_day(),
             KeyCode::Char('1') => self.set_filter(Filter::Day),
             KeyCode::Char('d') => self.ask_delete(),
             KeyCode::Char('2') => self.set_filter(Filter::Yesterday),

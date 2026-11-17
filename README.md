@@ -217,9 +217,10 @@ A separate program for browsing the summary interactively:
   them, so the bars add up to the total; the time shared with other tags is
   shown in a lighter shade. It's always shown below the details in a wide
   window; in a narrow one, `b` shows it.
-- **Filters:** quick buttons for day, yesterday, month and year, plus lists
-  to pick a month (Shift+3) or one of the last 5 years (Shift+4), a form for
-  your own date range (`5`), and a tag list (`6`).
+- **Filters:** quick buttons for day, yesterday, month and year, plus the
+  day of the selected entry (Shift+1), lists to pick a month (Shift+3) or
+  one of the last 5 years (Shift+4), a form for your own date range (`5`),
+  and a tag list (`6`).
 - **Tracking:** `s` starts a new entry (asking for tags and annotation)
   or stops the running one; a running entry's details have a red border.
 - **Editing:** `e` edits the start and end date and time, the tags and the

@@ -128,6 +128,13 @@ pub(crate) fn year_range(year: i16) -> Range {
     Range::new(month_range(year, 1).start, month_range(year, 12).end)
 }
 
+/// Local-time range covering the day `date`.
+pub(crate) fn day_range(date: jiff::civil::Date) -> Range {
+    let tz = jiff::tz::TimeZone::system();
+    let epoch = |d: jiff::civil::Date| d.to_zoned(tz.clone()).unwrap().timestamp().as_second();
+    Range::new(epoch(date), epoch(date.tomorrow().unwrap()))
+}
+
 /// Local-time range covering month `m` (1-12) of `year`.
 pub(crate) fn month_range(year: i16, m: i8) -> Range {
     let tz = jiff::tz::TimeZone::system();

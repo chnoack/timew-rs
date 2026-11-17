@@ -311,6 +311,7 @@ pub(crate) fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("click a row", "select it (again: details, narrow window)"),
         h("Periods"),
         k("1", "today"),
+        k("⇧1  !", "the day of the selected entry"),
         k("2", "yesterday"),
         k("3  m", "current month"),
         k("⇧3  § #  M", "pick a month of the shown year"),

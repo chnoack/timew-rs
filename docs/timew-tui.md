@@ -38,7 +38,7 @@ while the TUI is running. The only writes are saved edits (see
 │  W46 2026-11-11 Wed planning  8:00 12:00 4:00 … ││  Tags        planning     │
 ╰─────────────────────────────────────────────────╯╰───────────────────────────╯
  Total 7.00 h  ·  2 days  ·  3 intervals  ·  avg/day 3.50 h  ·  row 1/3        ← status
- ↑↓ move  1-4 range  ⇧3/⇧4 pick  5 range  6 tag  …  q quit                 ← help
+ ↑↓ move  1-4 range  ⇧1/⇧3/⇧4 pick  5 range  6 tag  …  q quit              ← help
 ```
 
 - **Focus:** the view that receives the keys has a **yellow border**: the
@@ -331,6 +331,7 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `1` | Today |
 | `2` | Yesterday |
 | `3` / `m` | The current month |
+| **Shift+1** (`!`) | The **day of the selected entry** |
 | **Shift+3** (`§` on German, `#` on US keyboards) / `M` | **Month list** |
 | `4` / `Y` | The current year |
 | **Shift+4** (`$`) | **Year list** |
@@ -379,14 +380,18 @@ A view is a **period** combined with an optional **tag**.
 
 | Period | Button label |
 | --- | --- |
-| Day, Yesterday | `1 Day`, `2 Yesterday` |
+| Today / the day of the selected entry | `1 Day` / `1 2026-03-04 ▾` |
+| Yesterday | `2 Yesterday` |
 | Current month / a picked month | `3 Month` / `3 2025-03 ▾` |
 | Current year / a picked year | `4 Year` / `4 2025 ▾` |
 | Your own range | `5 Range` / `5 2025-03-01 – 2025-03-31 ▾` |
 
 - The **tag** filter (`6 Tag`, or `6 meetings ▾` once a tag is selected) stays when you change the period.
-- Choosing `3` or `4` directly always goes back to the *current* month or
-  year.
+- Choosing `1`, `3` or `4` directly always goes back to *today* or the
+  *current* month or year.
+- **Shift+1** (`!`) shows the **day of the selected entry** (the day it is
+  listed under), with the entry still selected, for example to look at one
+  day of a month in detail.
 - The month list always opens on the year being shown, so you can pick a
   year with Shift+4 and then a month with Shift+3.
 

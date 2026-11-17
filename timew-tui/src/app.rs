@@ -14,7 +14,7 @@ use timew_core::paths::Paths;
 use timew_core::range::Range;
 use timew_core::summary::{self, Summary};
 
-use crate::filter::{Filter, MonthPicker, RangeInput, YearPicker, month_range, year_range};
+use crate::filter::{Filter, MonthPicker, RangeInput, YearPicker, day_range, month_range, year_range};
 use crate::format::local_date;
 use crate::forms::{DeleteDialog, EditForm, FIELDS, StartForm};
 use crate::ui::PAD;
@@ -70,6 +70,8 @@ pub(crate) struct App {
     pub(crate) picker: Option<ListState>,
     /// Screen area of the tag picker list from the last draw (for mouse clicks).
     pub(crate) picker_area: Rect,
+    /// Day shown by `Filter::Day`, picked with ⇧1 (None = today).
+    pub(crate) day: Option<jiff::civil::Date>,
     /// Month shown by `Filter::Month` (None = the current month).
     pub(crate) month: Option<(i16, i8)>,
     /// Open month picker.
@@ -139,6 +141,7 @@ impl App {
             all_tags: Vec::new(),
             picker: None,
             picker_area: Rect::default(),
+            day: None,
             month: None,
             month_picker: None,
             year: None,
@@ -168,6 +171,7 @@ impl App {
     /// fresh each time so external changes are picked up on reload.
     pub(crate) fn load(&mut self) {
         self.range = match (self.filter, self.month) {
+            (Filter::Day, _) if self.day.is_some() => day_range(self.day.unwrap()),
             (Filter::Month, Some((y, m))) => month_range(y, m),
             (Filter::Year, _) if self.year.is_some() => year_range(self.year.unwrap()),
             (f, _) => match f.hint() {
@@ -302,11 +306,16 @@ impl App {
 
     /// Back to the start view: the current month, all tags (`Esc`).
     pub(crate) fn reset_filters(&mut self) {
-        let default = self.filter == Filter::Month && self.month.is_none() && self.year.is_none() && self.tag.is_none();
+        let default = self.filter == Filter::Month
+            && self.day.is_none()
+            && self.month.is_none()
+            && self.year.is_none()
+            && self.tag.is_none();
         if default {
             return;
         }
         self.filter = Filter::Month;
+        self.day = None;
         self.month = None;
         self.year = None;
         self.tag = None;
@@ -316,15 +325,37 @@ impl App {
     }
 
     pub(crate) fn set_filter(&mut self, filter: Filter) {
-        // choosing Month/Year directly always means the current month/year
+        // choosing Day/Month/Year directly always means today/the current month/year
         if filter != self.filter
+            || (filter == Filter::Day && self.day.is_some())
             || (filter == Filter::Month && self.month.is_some())
             || (filter == Filter::Year && self.year.is_some())
         {
             self.filter = filter;
+            self.day = None;
             self.month = None;
             self.year = None;
             self.load();
+        }
+    }
+
+    /// ⇧1: show the day of the selected row (the day the row is listed
+    /// under), keeping the entry selected.
+    pub(crate) fn pick_day(&mut self) {
+        let Some(i) = self.table.selected() else { return };
+        let Some(date) = self.summary.rows.get(..=i).and_then(|rows| rows.iter().rev().find_map(|r| r.date.clone()))
+        else {
+            return;
+        };
+        let Ok(date) = date.parse::<jiff::civil::Date>() else { return };
+        let interval = self.selected().map(|t| t.interval.clone());
+        self.filter = Filter::Day;
+        self.day = Some(date);
+        self.month = None;
+        self.year = None;
+        self.load();
+        if let Some(interval) = interval {
+            self.select_interval(&interval);
         }
     }
 
@@ -340,6 +371,7 @@ impl App {
     pub(crate) fn pick_year(&mut self, i: usize) {
         if let Some(p) = self.year_picker.take() {
             self.filter = Filter::Year;
+            self.day = None;
             self.month = None;
             self.year = p.years.get(i).copied();
             self.load();
@@ -363,6 +395,7 @@ impl App {
     pub(crate) fn pick_month(&mut self, m: usize) {
         if let Some(p) = self.month_picker.take() {
             self.filter = Filter::Month;
+            self.day = None;
             self.month = Some((p.year, m as i8 + 1));
             self.load();
         }

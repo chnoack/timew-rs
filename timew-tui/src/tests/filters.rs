@@ -397,3 +397,41 @@ fn esc_resets_all_filters() {
     assert!(!app.quit && app.notice.is_none());
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn shift_1_shows_the_day_of_the_selected_entry() {
+    let root = sample_db("pick-day");
+    let mut app = App::new(root.clone());
+    // a range with yesterday and today, so the test works on any date
+    let today = jiff::Zoned::now().date();
+    let yesterday = today.yesterday().unwrap();
+    app.filter = Filter::Custom;
+    app.custom_range = Range::new(
+        local(yesterday.year(), yesterday.month(), yesterday.day(), 0, 0),
+        local(today.year(), today.month(), today.day(), 23, 59),
+    );
+    app.load();
+    app.table.select(Some(0)); // yesterday's planning
+    assert_eq!(app.selected().unwrap().interval.tags, vec!["planning"]);
+
+    press(&mut app, '!');
+    assert_eq!((app.filter, app.day), (Filter::Day, Some(yesterday)));
+    assert_eq!(app.summary.rows.len(), 1, "only yesterday's entry");
+    assert_eq!(app.selected().unwrap().interval.tags, vec!["planning"], "still selected");
+    let screen = render_at(&mut app, 140, 24);
+    assert!(screen.contains(&format!(" 1 {yesterday} ▾ ")), "the date is on the button:\n{screen}");
+    assert!(footer(&mut app).contains("⇧1/⇧3/⇧4 pick"), "{}", footer(&mut app));
+
+    // 1 goes back to today; Shift+1 (as some terminals report it) picks again
+    press(&mut app, '1');
+    assert_eq!((app.filter, app.day), (Filter::Day, None));
+    assert!(render_at(&mut app, 140, 24).contains(" 1 Day "));
+    assert_eq!(app.summary.rows.len(), 2);
+    app.table.select(Some(1));
+    key_with(&mut app, KeyCode::Char('1'), KeyModifiers::SHIFT);
+    assert_eq!(app.day, Some(today));
+    // Esc resets it like the other filters
+    key(&mut app, KeyCode::Esc);
+    assert_eq!((app.filter, app.day), (Filter::Month, None));
+    let _ = fs::remove_dir_all(&root);
+}

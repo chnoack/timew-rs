@@ -66,7 +66,7 @@ pub(crate) fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: boo
     items.extend([
         ("↑↓", "move"),
         ("1-4", "range"),
-        ("⇧3/⇧4", "pick"),
+        ("⇧1/⇧3/⇧4", "pick"),
         ("5", "range"),
         ("6", "tag"),
     ]);

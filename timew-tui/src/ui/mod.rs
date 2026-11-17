@@ -155,6 +155,9 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &mut App) {
         .enumerate()
         .map(|(i, f)| {
             let label = match (f, app.month, app.year) {
+                (Filter::Day, _, _) if app.filter == Filter::Day && app.day.is_some() => {
+                    format!(" {} {} ▾ ", i + 1, app.day.unwrap())
+                }
                 (Filter::Month, Some((y, m)), _) if app.filter == Filter::Month => {
                     format!(" {} {y}-{m:02} ▾ ", i + 1)
                 }
