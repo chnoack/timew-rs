@@ -193,7 +193,11 @@ impl Chart {
             let mut work = 0;
             if !self.blank {
                 for t in tracked {
-                    work += self.interval(&mut lines, day, t, first_hour);
+                    let seconds = self.interval(&mut lines, day, t, first_hour);
+                    // drawn, but an `_tag` entry doesn't count towards the totals
+                    if t.interval.counts_in_totals() {
+                        work += seconds;
+                    }
                 }
             }
 
@@ -406,7 +410,7 @@ impl Chart {
         } else {
             tracked
                 .iter()
-                .filter(|t| range.overlaps(&t.interval.range))
+                .filter(|t| range.overlaps(&t.interval.range) && t.interval.counts_in_totals())
                 .map(|t| {
                     let mut c = clip(t.interval.range, range);
                     if t.interval.is_open() {

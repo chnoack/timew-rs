@@ -79,10 +79,11 @@ pub(crate) fn draw_details(frame: &mut Frame, area: Rect, app: &mut App) {
 
 /// The details panel as a form for the start and end of the entry.
 fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
+    let new = app.edit.as_ref().is_some_and(|f| f.is_new());
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(FOCUS))
-        .title(" Edit entry ")
+        .title(if new { " New entry " } else { " Edit entry " })
         .title_bottom(Line::from(" Enter save · ⇧Enter adjust · Esc cancel ").right_aligned().dim())
         .padding(PAD);
     let inner = block.inner(area);
@@ -124,11 +125,11 @@ fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
         None if suggestion.is_some() => Line::styled(suggestion_hint(suggestion.as_ref()), Style::new().dim()),
         None if form.field == TAGS => Line::styled("separated by spaces, \"in quotes\" with spaces", Style::new().dim()),
         None if form.field == ANNOTATION => Line::styled("any text; empty removes the annotation", Style::new().dim()),
-        None if iv.is_open() => Line::styled("YYYY-MM-DD  HH:MM · empty end: still tracking", Style::new().dim()),
+        None if iv.is_open() && !new => Line::styled("YYYY-MM-DD  HH:MM · empty end: still tracking", Style::new().dim()),
         None => Line::styled("YYYY-MM-DD  HH:MM", Style::new().dim()),
     };
     let lines = vec![
-        Line::from(vec![label("ID"), Span::raw(format!("@{}", form.id))]),
+        Line::from(vec![label("ID"), Span::raw(if new { "new".to_string() } else { format!("@{}", form.id) })]),
         Line::from([vec![label("Tags")], field(TAGS)].concat()),
         Line::from([vec![label("Annotation")], field(ANNOTATION)].concat()),
         Line::raw(""),

@@ -9,7 +9,8 @@ use crate::{database, datetime, interval, paths, range, rules, validate};
 /// Replace the stored interval `from` with `to`, the way `timew modify`
 /// does: an overlap with another interval is refused, or with `adjust`
 /// resolved like `:adjust` (the other intervals are shortened, split or
-/// deleted). The tag counts are kept up to date.
+/// deleted). The tag counts are kept up to date. An empty `from`
+/// (`Interval::default()`) adds `to` as a new interval, like `timew track`.
 ///
 /// Returns how many other intervals were adjusted, and every change made
 /// (including those to adjusted intervals), which [`undo_change`] can
@@ -31,10 +32,12 @@ pub fn modify_interval(
         return Err("A running entry cannot start in the future.".to_string());
     }
     let mut s = open_session(paths, now)?;
-    if !s.db.intervals()?.contains(from) {
-        return Err("The entry was changed by another program. Press r to reload.".to_string());
+    if !from.is_empty() {
+        if !s.db.intervals()?.contains(from) {
+            return Err("The entry was changed by another program. Press r to reload.".to_string());
+        }
+        s.delete(from)?;
     }
-    s.delete(from)?;
     let overlapping = s.tracked_in(&to.range, &[])?.len();
     validate::auto_adjust(&mut s, adjust, to)?;
     s.add(to)?;
@@ -288,6 +291,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+
+    #[test]
+    fn modify_from_nothing_adds_an_entry() {
+        let root = std::env::temp_dir().join(format!("timew-core-add-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let paths = paths::Paths { config_dir: root.clone(), db_dir: root.clone() };
+        let start = make_local(2025, 3, 3, 8, 0, 0);
+        let mut first = Interval::new(Range::new(start, start + 3600));
+        first.add_tag("first");
+        std::fs::write(root.join("data/2025-03.data"), format!("{}\n", first.serialize())).unwrap();
+        let mut added = Interval::new(Range::new(start + 3600, start + 5400));
+        added.add_tag("added");
+        let (adjusted, changes) = modify_interval(&paths, &Interval::default(), &added, false).unwrap();
+        assert_eq!(adjusted, 0);
+        let file = root.join("data/2025-03.data");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("{}\n{}\n", first.serialize(), added.serialize()));
+        // an overlap is refused as with any edit
+        let overlapping = Interval::new(Range::new(start + 1800, start + 2700));
+        assert!(modify_interval(&paths, &Interval::default(), &overlapping, false).is_err());
+        undo_change(&paths, &changes).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("{}\n", first.serialize()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn delete_extending_the_previous_entry() {

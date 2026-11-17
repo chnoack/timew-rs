@@ -76,6 +76,12 @@ impl Interval {
         self.tags.iter().any(|t| t == tag)
     }
 
+    /// Whether the interval counts towards totals: not if it has a tag
+    /// starting with exactly one underscore (see [`is_uncounted_tag`]).
+    pub fn counts_in_totals(&self) -> bool {
+        !self.tags.iter().any(|t| is_uncounted_tag(t))
+    }
+
     /// Insert a tag, keeping the vector sorted + deduplicated (set semantics).
     pub fn add_tag(&mut self, tag: impl Into<String>) {
         let tag = tag.into();
@@ -260,6 +266,13 @@ pub fn year_month_of(epoch: Epoch) -> (i64, u32) {
 pub fn format_iso(epoch: Epoch) -> String {
     let (y, mo, d, h, mi, s) = civil_from_epoch(epoch);
     format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")
+}
+
+/// A tag starting with exactly one underscore (`_break`, not `__x`): an
+/// interval with such a tag is left out of totals (a deliberate addition
+/// of timew-rs; Timewarrior has no such rule).
+pub fn is_uncounted_tag(tag: &str) -> bool {
+    tag.starts_with('_') && !tag.starts_with("__")
 }
 
 /// Parse the compact UTC ISO form `YYYYMMDDTHHMMSSZ` back to a Unix epoch.

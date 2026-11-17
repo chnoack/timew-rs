@@ -20,12 +20,12 @@ fn question_mark_opens_the_key_legend() {
 
     press(&mut app, '?');
     assert_eq!(app.legend, Some(0));
-    let screen = render_at(&mut app, 100, 60);
+    let screen = render_at(&mut app, 100, 66);
     println!("{screen}");
     assert!(screen.contains(" Keys ") && screen.contains("Periods") && screen.contains("hours-per-tag chart"));
     // every line fits at this height: no scrolling
     press(&mut app, 'j');
-    render_at(&mut app, 100, 60);
+    render_at(&mut app, 100, 66);
     assert_eq!(app.legend, Some(0));
 
     // the legend takes all keys: these don't change the filter or quit

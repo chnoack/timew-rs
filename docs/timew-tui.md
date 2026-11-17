@@ -62,11 +62,18 @@ while the TUI is running. The only writes are saved edits (see
   **decimal hours** with two places: 7:30 is shown as `7.50`, 8:25 as
   `8.42`. `timew-cli summary` still shows `H:MM:SS` everywhere, because its
   output matches `timew`.
+- **Entries that don't count:** an entry with a tag that starts with
+  **exactly one underscore** (`_break`, but not `__x` or `x_y`) is listed
+  with its time, drawn in gray, but left out of the day's Total, the
+  status line's total and average, and the chart's total and percentages.
+  The whole entry is left out, also when it has other tags
+  (`_break meetings`). `timew-cli` leaves these entries out of its totals
+  the same way.
 - **Help line:** always starts with `? help` (the full key legend) and
   ends with `q quit`; in between it shows as many keys as fit the window
   width.
 - **Key legend:** `?` opens a window listing every key, mouse action and
-  popup key. In a low window it scrolls (`↑↓`, `PgUp`/`PgDn`, `g`/`G`, or
+  popup key. In a low window it scrolls (`↑↓`, `PgUp`/`PgDn`, `Ctrl+F`/`Ctrl+B`, `g`/`G`, or
   the mouse wheel). `?`, `Esc`, `q`, `Enter` or a click closes it.
 - **Status line:** the total, the number of days with entries, the number of
   rows, the average per day with entries, and your position in the list.
@@ -199,6 +206,22 @@ table):
 - `Esc` cancels without changing anything. While the form is open, all
   keys go to it.
 
+### Adding an entry
+
+`a` opens the same form for a **new** entry (titled "New entry"), right
+after the selected one: on its date, starting when it ends, 30 minutes
+long. If the next entry starts sooner, the end is that entry's start, so
+the new one fits into the gap. The cursor starts in the tags field (with
+[tag completion](#tag-completion)); start and end can be changed like in
+the edit form, but the end can't be left empty.
+
+- `Enter` adds the entry, `Shift+Enter`/`Alt+Enter` adds it and adjusts
+  overlapping entries, `Esc` cancels. Overlaps are refused as when
+  editing.
+- Afterwards the new entry is selected, and `u` removes it again.
+- A running entry has no end yet, so nothing can follow it; `a` then shows
+  a message instead.
+
 ### Tag completion
 
 In the tags field of the start dialog (`s`) and the edit form (`e`), the
@@ -268,6 +291,10 @@ is the tag's strong color and the second part a lighter shade of it.)
   same scale, set by the longest bar (own share plus shared time), and are
   drawn with eighth blocks.
 - **Entries without a tag** are shown as "(no tag)", in gray.
+- **`_` tags** (one leading underscore, see above) get a bar with their
+  hours but no percentage, as they are not part of the total. An entry
+  with such a tag counts only for its `_` tags, not for its other tags, so
+  the other bars still add up to the total.
 - **Legend:** when there is shared time, the Total line explains the two
   shades.
 - **Colors:** every bar has a color pair (strong and light) from the
@@ -292,22 +319,24 @@ is the tag's strong color and the second part a lighter shade of it.)
 | --- | --- |
 | `↑` `↓` / `k` `j` | Move up or down a row |
 | `PgUp` `PgDn` / `Space` | Move a page |
+| `Ctrl+F` / `Ctrl+B` | Move a page forward / back |
 | `Home` `End` / `g` `G` | First or last row |
 | `Enter` | Open or close the details (narrow layout) |
 | `s` | **Start** a new entry (asks for tags and annotation), or **stop** the running one |
 | `e` | **Edit** the start, end, tags and annotation of the selected entry |
+| `a` | **Add** an entry right after the selected one (see [Adding an entry](#adding-an-entry)) |
 | `d` | **Delete** the selected entry, after asking (`y` deletes) |
-| `u` | **Undo** the last saved edit, start, stop or delete (only shown while there is one) |
+| `u` | **Undo** the last saved edit, addition, start, stop or delete (only shown while there is one) |
 | `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
 | `1` | Today |
-| `2` / `y` | Yesterday |
+| `2` | Yesterday |
 | `3` / `m` | The current month |
 | **Shift+3** (`§` on German, `#` on US keyboards) / `M` | **Month list** |
 | `4` / `Y` | The current year |
 | **Shift+4** (`$`) | **Year list** |
 | `←` `→` / `h` `l` / `Tab` | Previous or next of the four fixed periods |
 | `5` / `c` | **Date range form** |
-| `6` / `t` | **Tag list** |
+| `6` | **Tag list** |
 | `r` | Reload from disk |
 | `?` | Show the **key legend** (all keys in one window) |
 | `i` | Show the **info** dialog: the timew-tui version, the version of the `timew-core` library it uses, the license and copyright, and the project page on GitHub. Any key or a click closes it. |
@@ -335,7 +364,7 @@ legend (`?`) works the same way.
 | --- | --- |
 | **Month list** (Shift+3) | `↑↓`/`jk` and `g`/`G` move · `←→`/`hl` change the year · `Enter`/`Space` select · `⌫` **current month** (same as `3`) · `Esc`/`q` close |
 | **Year list** (Shift+4) | The current year and the four before it, newest first · `↑↓`/`jk` and `g`/`G` move · `Enter`/`Space` select · `⌫` **current year** (same as `4`) · `Esc`/`q` close |
-| **Tag list** (`t`) | "All tags" plus every tag in the database with its entry count · `↑↓`/`jk`, `PgUp`/`PgDn` and `g`/`G` move · `Enter`/`Space` select · `⌫` **remove the tag filter** · `Esc`/`q`/`t` close |
+| **Tag list** (`6`) | "All tags" plus every tag in the database with its entry count · `↑↓`/`jk`, `PgUp`/`PgDn` and `g`/`G` move · `Enter`/`Space` select · `⌫` **remove the tag filter** · `Esc`/`q`/`6` close |
 | **Date range** (`c`) | Type into **From**/**To** · `Tab`/`↑↓` or a click switches fields · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` apply · `Esc` cancel |
 | **Delete** (`d`) | Shows the entry (ID, tags, annotation, start, end, duration, and the days it spans) · `y` deletes · `e` deletes and extends the previous entry to its end (only offered if there is one; the dialog shows which) · `n`/`Esc`/`q` cancel · `Enter`, other keys and clicks do nothing |
 | **Start dialog** (`s`) | Type the tags and the annotation · `Tab`/`↑↓` switch fields · `←→`, `Home`/`End` move the cursor · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` start · `Esc` cancel |

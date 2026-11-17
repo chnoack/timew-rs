@@ -324,3 +324,21 @@ fn extension_reports() {
     assert_eq!(db.ok(&["report", "echo", "2025-03-04"]).lines().last(), Some("]"));
     assert!(db.ok(&["extensions"]).contains("echo.sh   Active"));
 }
+
+/// Not in Timewarrior: entries with a tag starting with one underscore are
+/// listed but left out of the totals.
+#[test]
+fn underscore_tags_are_left_out_of_totals() {
+    let db = Db::new();
+    db.ok(&[":yes", "track", "2025-03-03T08:00", "-", "2025-03-03T10:00", "meetings"]);
+    db.ok(&["track", "2025-03-03T10:00", "-", "2025-03-03T11:00", "_break", "meetings"]);
+    db.ok(&["track", "2025-03-03T11:00", "-", "2025-03-03T11:30", "__double"]);
+    let summary = db.ok(&["summary", "2025-03-03", "rc.color=off"]);
+    assert!(summary.contains("_break,") && summary.contains("1:00:00"), "{summary}");
+    // the day total and the grand total: 2:00 + 0:30, without the hour of _break
+    assert!(summary.contains("0:30:00 2:30:00\n"), "{summary}");
+    assert!(summary.trim_end().ends_with("2:30:00"), "{summary}");
+    let day = db.ok(&["day", "2025-03-03", "rc.color=off", "rc.reports.day.totals=on", "rc.reports.day.summary=on"]);
+    assert!(day.contains("2:30") && !day.contains("3:30"), "{day}");
+    assert!(day.contains("Tracked") && day.contains("2:30:00"), "{day}");
+}

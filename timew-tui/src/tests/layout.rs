@@ -102,6 +102,7 @@ fn week_colors_alternate_per_iso_week() {
         end: String::new(),
         time: String::new(),
         total: String::new(),
+        counted: true,
         source: 0,
     };
     let rows = [
@@ -168,7 +169,7 @@ fn focused_view_has_a_yellow_border() {
     assert_ne!(corner(&mut app), FOCUS, "the edit form has it");
     key(&mut app, KeyCode::Esc);
     assert_eq!(corner(&mut app), FOCUS);
-    press(&mut app, 't');
+    press(&mut app, '6');
     assert_ne!(corner(&mut app), FOCUS, "the tag list has it");
     key(&mut app, KeyCode::Esc);
     press(&mut app, '?');

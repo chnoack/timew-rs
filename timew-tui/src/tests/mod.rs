@@ -6,6 +6,7 @@ mod completion;
 mod edit;
 mod filters;
 mod help;
+mod keys;
 mod layout;
 mod tracking;
 

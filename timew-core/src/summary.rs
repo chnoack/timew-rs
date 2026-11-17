@@ -1,5 +1,7 @@
 //! The rows of a summary: one row per interval and day, with daily and
-//! grand totals, every cell already formatted as text. `timew-cli summary`
+//! grand totals, every cell already formatted as text. Intervals with a tag
+//! starting with one underscore (`_break`) get rows but don't count
+//! towards the totals. `timew-cli summary`
 //! lays them out as a table; `timew-tui` shows them in its list.
 
 use jiff::civil::Date;
@@ -23,13 +25,18 @@ pub struct Row {
     pub end: String,
     pub time: String,
     pub total: String,
+    /// Whether the row's time counts towards the daily and grand totals
+    /// (not for an interval with an `_tag`, see
+    /// [`Interval::counts_in_totals`](crate::interval::Interval::counts_in_totals)).
+    pub counted: bool,
     /// Index into the `tracked` slice passed to `build` of the interval
     /// this row was derived from (a multi-day interval yields several rows
     /// with the same index).
     pub source: usize,
 }
 
-/// The rows of a summary plus the grand total in seconds.
+/// The rows of a summary plus the grand total in seconds (of the counted
+/// rows only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Summary {
     pub rows: Vec<Row>,
@@ -109,9 +116,12 @@ pub fn build_at(range: &Range, tracked: &[Tracked], now: Epoch) -> Summary {
                 end: if iv.is_open() { "-".to_string() } else { time_of_day(part.end, &day_range) },
                 time: format_hours(total),
                 total: String::new(),
+                counted: iv.counts_in_totals(),
                 source,
             });
-            daily_total += total;
+            if iv.counts_in_totals() {
+                daily_total += total;
+            }
         }
         if rows.len() > first_row {
             rows.last_mut().unwrap().total = format_hours(daily_total);
@@ -158,6 +168,24 @@ mod tests {
         }
         interval.annotation = annotation.map(str::to_string);
         Tracked { id, interval, synthetic: false }
+    }
+
+    #[test]
+    fn underscore_tags_are_left_out_of_the_totals() {
+        let day = make_local(2025, 3, 3, 0, 0, 0);
+        let h = 3600;
+        let t = vec![
+            tracked(3, day + 8 * h, day + 10 * h, &["meetings"], None),
+            tracked(2, day + 10 * h, day + 11 * h, &["_break", "meetings"], None),
+            tracked(1, day + 11 * h, day + 12 * h, &["__double"], None),
+        ];
+        let summary = build_at(&Range::new(day, day + 24 * h), &t, day + 30 * h);
+        assert_eq!(summary.rows.iter().map(|r| r.counted).collect::<Vec<_>>(), [true, false, true]);
+        assert_eq!(summary.rows[1].time, "1:00:00", "the row keeps its own time");
+        assert_eq!(summary.rows[2].total, "3:00:00", "the daily total leaves out the _break hour");
+        assert_eq!(summary.grand_total, 3 * h);
+        assert!(crate::interval::is_uncounted_tag("_"));
+        assert!(!crate::interval::is_uncounted_tag("a_b"));
     }
 
     fn at(d: i64, h: i64, m: i64, s: i64) -> Epoch {

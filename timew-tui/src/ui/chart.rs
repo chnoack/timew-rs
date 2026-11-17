@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use timew_core::interval::is_uncounted_tag;
 
 use crate::app::App;
 use crate::format::{decimal_hours, decimal_hours_f, parse_hms};
@@ -70,13 +71,17 @@ pub(crate) struct TagTotal {
 
 /// Hours per tag over the rows currently in the list, splitting each entry's
 /// time evenly among its tags (see `TagTotal`). Entries without tags count
-/// for "(no tag)". Each row's own (per-day, range-clipped) time is used, so
-/// the numbers match the table. Sorted by share, then shared time, then name.
+/// for "(no tag)". An entry with an `_tag` (not counted in the totals)
+/// counts only for its `_tags`, so the other bars add up to the total. Each
+/// row's own (per-day, range-clipped) time is used, so the numbers match
+/// the table. Sorted by share, then shared time, then name.
 pub(crate) fn tag_totals(app: &App) -> Vec<TagTotal> {
     let mut totals = std::collections::BTreeMap::<String, (f64, f64)>::new();
     for row in &app.summary.rows {
         let secs = parse_hms(&row.time).unwrap_or(0) as f64;
-        let tags = &app.tracked[row.source].interval.tags;
+        let all = &app.tracked[row.source].interval.tags;
+        let uncounted: Vec<String> = all.iter().filter(|t| is_uncounted_tag(t)).cloned().collect();
+        let tags = if row.counted { all } else { &uncounted };
         if tags.is_empty() {
             totals.entry(NO_TAG.to_string()).or_default().0 += secs;
         }
@@ -203,7 +208,9 @@ pub(crate) fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
                 };
                 spans.push(Span::styled(text, Style::new().fg(Color::Gray)));
             }
-            spans.push(Span::styled(format!("  {pct:>3.0} %"), Style::new().dim()));
+            // an `_tag` is not part of the total, so it has no percentage
+            let pct = if is_uncounted_tag(&t.tag) { "     ".to_string() } else { format!("{pct:>3.0} %") };
+            spans.push(Span::styled(format!("  {pct}"), Style::new().dim()));
             Line::from(spans)
         })
         .collect();

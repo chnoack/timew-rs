@@ -5,6 +5,7 @@
 use timew_core::database::Tracked;
 use timew_core::datetime::make_local;
 use timew_core::interval::Interval;
+use timew_core::range::Range;
 
 use crate::format::local_date;
 
@@ -292,6 +293,22 @@ impl EditForm {
         }
     }
 
+    /// The form for a new entry from `start` to `end`, without tags or
+    /// annotation; the cursor is in the tags field.
+    pub(crate) fn new_entry(start: i64, end: i64) -> Self {
+        let mut form = EditForm::new(&Tracked { id: 0, interval: Interval::new(Range::new(start, end)), synthetic: false });
+        form.original = Interval::default();
+        // nothing is stored yet: every field counts as changed
+        form.initial = Default::default();
+        form.focus(TAGS, true);
+        form
+    }
+
+    /// Whether the form adds a new entry (`a`) instead of editing one.
+    pub(crate) fn is_new(&self) -> bool {
+        self.original.is_empty()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.fields[self.field].chars().count()
     }
@@ -370,7 +387,7 @@ impl EditForm {
             edited.range.start = parse_date_time(f[0], f[1], "Start")?;
         }
         if f[2].is_empty() && f[3].is_empty() {
-            if !self.original.is_open() {
+            if self.is_new() || !self.original.is_open() {
                 return Err("Enter the end date and time.".into());
             }
             edited.range.end = 0;

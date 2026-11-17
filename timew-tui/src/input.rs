@@ -123,7 +123,7 @@ impl App {
 
     fn on_picker_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('t') | KeyCode::Char('6') => self.picker = None,
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('6') => self.picker = None,
             KeyCode::Down | KeyCode::Char('j') => self.picker_move(1),
             KeyCode::Up | KeyCode::Char('k') => self.picker_move(-1),
             KeyCode::PageDown => self.picker_move(10),
@@ -222,10 +222,14 @@ impl App {
             KeyCode::Esc if self.chart && !self.wide => self.chart = false,
             KeyCode::Esc if self.details && !self.wide => self.details = false,
             // the wide layout always shows the chart; b toggles it in the narrow one
+            // Ctrl+F / Ctrl+B: a page forward / back (as in less and vi)
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => self.scroll_by(page),
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => self.scroll_by(-page),
             KeyCode::Char('b') if !self.wide => self.chart = !self.chart,
             KeyCode::Enter => self.toggle_details(),
             KeyCode::Char('i') => self.info = true,
             KeyCode::Char('e') => self.open_edit(),
+            KeyCode::Char('a') => self.add_entry(),
             KeyCode::Char('u') => self.undo_edit(),
             KeyCode::Char('s') => self.start_or_stop(),
             KeyCode::Char('q') => self.quit = true,
@@ -239,7 +243,7 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => self.scroll_by(isize::MAX / 2),
             KeyCode::Char('1') => self.set_filter(Filter::Day),
             KeyCode::Char('d') => self.ask_delete(),
-            KeyCode::Char('2') | KeyCode::Char('y') => self.set_filter(Filter::Yesterday),
+            KeyCode::Char('2') => self.set_filter(Filter::Yesterday),
             // Shift+3: '§' on German, '#' on US layouts (or '3' + SHIFT where reported)
             KeyCode::Char('§') | KeyCode::Char('#') | KeyCode::Char('M') => self.open_month_picker(),
             KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::SHIFT) => self.open_month_picker(),
@@ -251,7 +255,7 @@ impl App {
             KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => self.set_filter(self.filter.cycle(1)),
             KeyCode::Left | KeyCode::BackTab | KeyCode::Char('h') => self.set_filter(self.filter.cycle(-1)),
             KeyCode::Char('5') | KeyCode::Char('c') => self.open_range_input(),
-            KeyCode::Char('6') | KeyCode::Char('t') => self.open_picker(),
+            KeyCode::Char('6') => self.open_picker(),
             KeyCode::Char('?') => self.legend = Some(0),
             KeyCode::Char('r') => self.load(),
             _ => {}
@@ -264,6 +268,8 @@ impl App {
             KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => self.legend = None,
             KeyCode::Down | KeyCode::Char('j') => self.legend_scroll(1),
             KeyCode::Up | KeyCode::Char('k') => self.legend_scroll(-1),
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => self.legend_scroll(page),
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => self.legend_scroll(-page),
             KeyCode::PageDown | KeyCode::Char(' ') => self.legend_scroll(page),
             KeyCode::PageUp => self.legend_scroll(-page),
             KeyCode::Home | KeyCode::Char('g') => self.legend_scroll(i32::MIN / 2),

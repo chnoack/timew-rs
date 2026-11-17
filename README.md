@@ -223,12 +223,16 @@ A separate program for browsing the summary interactively:
 - **Tracking:** `s` starts a new entry (asking for tags and annotation)
   or stops the running one; a running entry's details have a red border.
 - **Editing:** `e` edits the start and end date and time, the tags and the
-  annotation of the selected entry in the details panel; `d` deletes it
+  annotation of the selected entry in the details panel; `a` adds a new
+  entry right after it (30 minutes, starting when it ends); `d` deletes it
   after asking, optionally giving its time to the previous entry. Overlaps are refused, or adjusted with
   Shift+Enter (or Alt+Enter), and `u` undoes the last edit.
 - **Tag completion:** in both forms, known tags are suggested while you
   type, ignoring case (the most used first); `Tab` or `→` takes the
   suggestion in the tag's stored spelling.
+- **Uncounted entries:** an entry with a tag starting with one underscore
+  (`_break`) is listed (its time in gray) but left out of all totals; the
+  same applies to `timew-cli`'s totals.
 
 Press `?` in the TUI for a list of all keys. Details: [docs/timew-tui.md](docs/timew-tui.md).
 

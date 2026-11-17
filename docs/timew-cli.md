@@ -202,6 +202,12 @@ and the hints above. An interval that runs past midnight gets one row per
 day; a running one counts up to now. Holidays in the range are listed
 below. The table fits itself to the terminal width, wrapping long cells.
 
+An interval with a tag that starts with exactly one underscore (`_break`,
+not `__x`) is listed with its time but left out of the daily totals and
+the grand total, also when it has other tags. The same goes for the totals
+and the "Tracked" line of `day`, `week` and `month` (the interval is still
+drawn). This is not in Timewarrior.
+
 ### `day`, `week`, `month`
 
 Settings `reports.<day|week|month>.<name>`:
@@ -284,5 +290,8 @@ These are deliberate; most fix something the original gets wrong.
 - `dom.rc.<name>` of an unset name is empty instead of an error.
 - `help <command>` without installed man pages shows the command's usage.
 - `info` is new: version, license and project page.
+- Intervals with a tag starting with exactly one underscore (`_break`) are
+  left out of the totals of `summary`, `day`, `week` and `month`
+  (Timewarrior counts them).
 - Backslashes in annotations are kept.
 - `:debug` produces no debug output.

@@ -21,6 +21,34 @@ impl App {
         }
     }
 
+    /// `a`: the edit form for a new entry right after the selected one:
+    /// from its end, 30 minutes long (shorter if the next entry starts
+    /// sooner).
+    pub(crate) fn add_entry(&mut self) {
+        let Some(t) = self.selected() else { return };
+        let iv = &t.interval;
+        if iv.is_open() {
+            self.notice = Some("The selected entry is still running; a new entry can only follow a finished one.".into());
+            self.notice_failed = true;
+            return;
+        }
+        let start = iv.range.end;
+        let mut end = start + 30 * 60;
+        // the next stored entry, also one hidden by a filter
+        let next = Database::open(self.db_root.join("data"))
+            .ok()
+            .and_then(|mut db| db.intervals().ok().map(|all| all.iter().map(|i| i.range.start).filter(|s| *s > start).min()))
+            .flatten();
+        if let Some(next) = next {
+            end = end.min(next);
+        }
+        self.edit = Some(EditForm::new_entry(start, end));
+        if !self.wide {
+            self.chart = false;
+            self.details = true;
+        }
+    }
+
     pub(crate) fn save_edit(&mut self, adjust: bool) {
         let Some(form) = &mut self.edit else { return };
         let edited = match form.edited() {
@@ -38,6 +66,7 @@ impl App {
             Err(e) => return form.error = Some(e),
         };
         let changed = !actions.is_empty();
+        let added = form.is_new();
         if changed {
             self.last_edit = Some((form.original.clone(), actions));
         }
@@ -49,10 +78,11 @@ impl App {
             1 => " 1 overlapping entry adjusted.".into(),
             n => format!(" {n} overlapping entries adjusted."),
         };
+        let done = if added { "Added" } else { "Saved" };
         self.notice = Some(match (changed, row) {
             (false, _) => "No changes.".into(),
-            (true, Some(_)) => format!("Saved.{others} u undoes it."),
-            (true, None) => format!("Saved; the entry is now outside the shown period.{others} u undoes it."),
+            (true, Some(_)) => format!("{done}.{others} u undoes it."),
+            (true, None) => format!("{done}; the entry is outside the shown period.{others} u undoes it."),
         });
         self.notice_failed = false;
     }

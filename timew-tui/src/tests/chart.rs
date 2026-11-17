@@ -200,3 +200,50 @@ fn stacked_bars_use_eighth_blocks_in_two_shades() {
         assert_eq!(w, 4, "{a} {b}");
     }
 }
+
+#[test]
+fn underscore_tags_are_left_out_of_the_totals() {
+    let root = env::temp_dir().join(format!("timew-tui-test-uncounted-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("data")).unwrap();
+    let today = jiff::Zoned::now().date();
+    let lines = format!(
+        "inc {} - {} # meetings\ninc {} - {} # _break meetings\ninc {} - {} # email\n",
+        today_at(8, 0),
+        today_at(10, 0),
+        today_at(10, 0),
+        today_at(11, 0),
+        today_at(11, 0),
+        today_at(12, 0)
+    );
+    fs::write(root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month())), lines).unwrap();
+    let mut app = App::new(root.clone());
+    press(&mut app, '1');
+    assert_eq!(app.summary.grand_total, 3 * 3600, "the _break hour doesn't count");
+
+    let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    let text: Vec<String> =
+        (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect();
+    let screen = text.join("\n");
+    println!("{screen}");
+    assert!(screen.contains("Total 3.00 h"), "status line");
+    // the day's total (on its last row) is 3.00
+    let last = text.iter().find(|l| l.contains("email") && l.contains("12:00")).unwrap();
+    assert!(last.contains("1:00  3.00"), "{last}");
+    // chart: meetings only with the counted entry, _break without a percentage
+    let line = |tag: &str| text.iter().find(|l| l.contains(&format!("  {tag} ")) && l.contains(" h ")).unwrap().clone();
+    assert!(line("meetings").contains("2.00 h") && line("meetings").contains("67 %"), "{}", line("meetings"));
+    assert!(line("email").contains("33 %"));
+    assert!(line("_break").contains("1.00 h") && !line("_break").contains('%'), "{}", line("_break"));
+    // the _break row's time is gray, the others are not
+    let row = text.iter().position(|l| l.contains("_break, meetings")).unwrap() as u16;
+    let time_x = |l: &str| l[..l.find(" 1:00 ").unwrap() + 1].chars().count() as u16;
+    let x = time_x(&text[row as usize]);
+    assert_eq!(buf[(x, row)].fg, Color::Indexed(244));
+    let other = text.iter().position(|l| l.contains("email") && l.contains("12:00")).unwrap() as u16;
+    let x2 = time_x(&text[other as usize]);
+    assert_ne!(buf[(x2, other)].fg, Color::Indexed(244));
+    let _ = fs::remove_dir_all(&root);
+}

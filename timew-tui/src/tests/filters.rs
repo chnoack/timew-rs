@@ -67,7 +67,7 @@ fn tag_picker_filters_by_tag() {
         vec![("email".into(), 1), ("meetings".into(), 1), ("planning".into(), 1)]
     );
 
-    press(&mut app, 't');
+    press(&mut app, '6');
     let screen = render(&mut app);
     println!("{screen}");
     assert!(screen.contains("Filter by tag") && screen.contains("All tags"));
@@ -94,7 +94,7 @@ fn tag_picker_filters_by_tag() {
     assert_eq!(app.tag.as_deref(), Some("meetings"));
 
     // Backspace inside the picker clears the tag filter and closes it
-    press(&mut app, 't');
+    press(&mut app, '6');
     key(&mut app, KeyCode::Backspace);
     assert!(app.picker.is_none());
     assert_eq!(app.tag, None);
@@ -124,7 +124,7 @@ fn tag_picker_by_mouse_and_esc() {
     click(&mut app, a.x + 1, a.y + 3); // "planning"
     assert_eq!(app.tag.as_deref(), Some("planning"));
 
-    press(&mut app, 't');
+    press(&mut app, '6');
     key(&mut app, KeyCode::Esc);
     assert!(app.picker.is_none() && !app.quit, "Esc only closes the picker");
     assert_eq!(app.tag.as_deref(), Some("planning"));
@@ -374,7 +374,7 @@ fn esc_resets_all_filters() {
     let default_range = app.range;
     // year, a tag, then Esc: back to the current month without a tag
     press(&mut app, '4');
-    press(&mut app, 't');
+    press(&mut app, '6');
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
     assert!(app.tag.is_some() && app.filter == Filter::Year);

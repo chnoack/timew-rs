@@ -18,6 +18,10 @@ use crate::ui::{ACCENT, FOCUS, PAD};
 const WEEK_COLORS: [Color; 2] = [Color::Cyan, Color::Magenta];
 
 /// Color of the line that marks a gap between two entries of a day.
+/// The time of an entry that doesn't count towards the totals (it has a
+/// tag starting with one underscore).
+pub(crate) const UNCOUNTED: Color = Color::Indexed(244);
+
 pub(crate) const GAP_COLOR: Color = Color::Indexed(244);
 
 /// For each summary row: whether there is untracked time between it and
@@ -148,9 +152,12 @@ pub(crate) fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
             day_index += 1;
         }
         let stripe = if day_index % 2 == 1 { Style::new().bg(Color::Indexed(235)) } else { Style::new() };
+        let counted = app.summary.rows[i].counted;
         let cells = cells.into_iter().enumerate().map(|(c, s)| {
             let style = match c {
                 0..=2 => Style::new().fg(WEEK_COLORS[weeks[i]]).bold(),
+                // the time of an `_tag` entry doesn't count towards the totals
+                6 if !counted => Style::new().fg(UNCOUNTED),
                 7 => Style::new().fg(Color::Yellow).bold(),
                 _ => Style::new(),
             };
