@@ -231,6 +231,8 @@ A separate program for browsing the summary interactively:
 - **Tag completion:** in both forms, known tags are suggested while you
   type, ignoring case (the most used first); `Tab` or `→` takes the
   suggestion in the tag's stored spelling.
+- **CSV export:** `x` writes the table as it is filtered, plus the
+  annotations, to a CSV file (`timew-cli export :csv` does the same).
 - **Uncounted entries:** an entry with a tag starting with one underscore
   (`_break`) is listed (its time in gray) but left out of all totals; the
   same applies to `timew-cli`'s totals.
@@ -277,6 +279,7 @@ differently in a few places. The ones you are most likely to notice:
   (`data/undo.data`); changes are final. `timew-tui` can undo its last
   change with `u`. An `undo.data` written by Timewarrior is left alone.
 - **New command `info`:** version, license and project page.
+- **CSV export:** `export :csv` writes a CSV table instead of JSON.
 - **Dates as ranges:** `2025-03` means the whole month and `2025-W10` the
   whole week (Timewarrior: only the first day); days are calendar days,
   also around daylight saving changes.

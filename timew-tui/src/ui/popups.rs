@@ -259,6 +259,53 @@ pub(crate) fn draw_range_input(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.set_cursor_position(Position::new(cursor_x.min(active.right() - 1), active.y));
 }
 
+pub(crate) fn draw_export(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(form) = &app.export else { return };
+    let w = 64.min(area.width);
+    let field_w = w.saturating_sub(2 + PAD.left + PAD.right + 6) as usize;
+    let label = Span::styled(format!("{:<6}", "File"), Style::new().fg(ACCENT).bold());
+    // the end of a long path stays visible
+    let chars: Vec<char> = form.path.chars().collect();
+    let skip = (chars.len() + 2).saturating_sub(field_w);
+    let shown: String = chars[skip.min(chars.len())..].iter().collect();
+    let hint = Style::new().dim();
+    let n = app.summary.rows.len();
+    let dir = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    let mut lines = vec![
+        Line::from([vec![label], super::text_field(shown.clone(), None, field_w, true)].concat()),
+        Line::raw(""),
+        Line::styled(format!("{n} row{} of the table, with annotations", if n == 1 { "" } else { "s" }), hint),
+        Line::styled(format!("Relative to {dir}"), hint),
+        Line::styled(
+            match app.csv_separator() {
+                Ok('\t') => "Separator: tab (export.csv.separator)".to_string(),
+                Ok(c) => format!("Separator: {c} (export.csv.separator)"),
+                Err(e) => e,
+            },
+            hint,
+        ),
+    ];
+    if let Some(err) = &form.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(err.clone(), Style::new().fg(Color::Red).bold()));
+    }
+    let h = (lines.len() as u16 + 2 + PAD.top + 1).min(area.height);
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(ACCENT))
+        .title(" Export as CSV ")
+        .title_bottom(Line::from(" Enter export · Esc cancel ").right_aligned().dim())
+        .padding(Padding::new(PAD.left, PAD.right, PAD.top, 1));
+    let inner = block.inner(popup);
+    let cursor_x = inner.x + 6 + 1 + shown.chars().count() as u16;
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), popup);
+    if inner.width > 0 && inner.height > 0 {
+        frame.set_cursor_position(Position::new(cursor_x.min(inner.right() - 1), inner.y));
+    }
+}
+
 pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(state) = &mut app.picker else { return };
     let name_w = app.all_tags.iter().map(|(t, _)| t.chars().count()).max().unwrap_or(0).max(8);
@@ -353,6 +400,7 @@ pub(crate) fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("Ctrl+U", "clear the field (date form)"),
         k("Esc", "close without changes"),
         h("Other"),
+        k("x", "export the table as CSV (with annotations)"),
         k("r", "reload from disk"),
         k("?", "this legend"),
         k("i", "info: version, license and project page"),

@@ -234,6 +234,47 @@ the edit form, but the end can't be left empty.
 - A running entry has no end yet, so nothing can follow it; `a` then shows
   a message instead.
 
+### Exporting as CSV
+
+`x` writes the rows of the table, as the filters show them (period and
+tag), to a CSV file. It asks for the file name, prefilled from the period
+and tag, e.g. `timew-2026-11-01_2026-11-30.csv` or
+`timew-2026-11-17-meetings.csv`. A relative name is relative to the
+directory timew-tui was started in (the dialog shows it); `~/` is the home
+directory.
+
+```
+Wk,Date,Day,Tags,Start,End,Time,Total,Annotation
+W47,2026-11-16,Mon,planning,7:50,8:05,0:15,,
+W47,2026-11-16,Mon,"meetings, team",8:05,10:05,2:00,2.25,"weekly, with notes"
+```
+
+- The first line has the headings: the columns of the table plus
+  **Annotation**.
+- Wk, Date and Day are on every row (the table shows them only on the
+  first row of a day), so the file can be sorted and filtered.
+- The cells are as in the table: times as `H:MM`, Total (on the last row
+  of a day) in decimal hours, uncounted entries (`_tag`) with their time
+  but left out of Total.
+- Commas separate the fields, unless `export.csv.separator` in
+  `timewarrior.cfg` says otherwise (see below); the dialog shows the one
+  in use. A field with the separator, a quote or a line break is in double
+  quotes (`"` doubled), as spreadsheets expect.
+- If the file exists, `Enter` asks first; a second `Enter` overwrites it.
+  Afterwards a message shows the number of rows and the full path.
+
+`timew-cli export :csv` writes the same format, with the same setting:
+
+```
+export.csv.separator = ;      # e.g. for a German Excel
+export.csv.separator = tab    # tab-separated
+```
+
+The value is one character (not `"`; `#` starts a comment in the file) or
+`tab`; unset or empty means a comma. The file is read at each export, so a
+change applies without restarting. An invalid value is reported in the
+dialog and nothing is written.
+
 ### Tag completion
 
 In the tags field of the start dialog (`s`) and the edit form (`e`), the
@@ -361,6 +402,7 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `←` `→` / `h` `l` / `Tab` | Previous or next of the four fixed periods |
 | `5` / `c` | **Date range form** |
 | `6` | **Tag list** |
+| `x` | **Export** the table as CSV, with the annotations (see [Exporting as CSV](#exporting-as-csv)) |
 | `r` | Reload from disk |
 | `?` | Show the **key legend** (all keys in one window) |
 | `i` | Show the **info** dialog: the timew-tui version, the version of the `timew-core` library it uses, the license and copyright, and the project page on GitHub. Any key or a click closes it. |
@@ -392,6 +434,7 @@ legend (`?`) works the same way.
 | **Date range** (`c`) | Type into **From**/**To** · `Tab`/`↑↓` or a click switches fields · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` apply · `Esc` cancel |
 | **Delete** (`d`) | Shows the entry (ID, tags, annotation, start, end, duration, and the days it spans) · `y` deletes · `e` deletes and extends the previous entry to its end (only offered if there is one; the dialog shows which) · `n`/`Esc`/`q` cancel · `Enter`, other keys and clicks do nothing |
 | **Start dialog** (`s`) | Type the tags and the annotation · `Tab`/`↑↓` switch fields · `←→`, `Home`/`End` move the cursor · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` start · `Esc` cancel |
+| **Export** (`x`) | Type the file name · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` export (a second `Enter` overwrites an existing file) · `Esc` cancel |
 | **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous (start date, start time, end date, end time, tags, annotation) · in dates and times typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`); in the tags and the annotation it inserts · `←→`, `Home`/`End` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
 
 Each list opens on the current choice: the month or year being shown, or the

@@ -21,7 +21,7 @@ use crate::ui::chart::{chart_fit, chart_height, draw_chart, tag_totals};
 use crate::ui::details::draw_details;
 use crate::ui::footer::{draw_help, draw_messages, draw_status, messages_height};
 use crate::ui::popups::{
-    draw_confirm_delete, draw_info, draw_legend, draw_month_picker, draw_picker, draw_range_input,
+    draw_confirm_delete, draw_export, draw_info, draw_legend, draw_month_picker, draw_picker, draw_range_input,
     draw_start_form, draw_year_picker,
 };
 use crate::ui::table::{draw_summary, summary_title, table_width};
@@ -123,6 +123,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     draw_help(frame, help, app.wide, app.last_edit.is_some(), app.running.is_some());
     draw_picker(frame, body, app);
     draw_range_input(frame, body, app);
+    draw_export(frame, body, app);
     draw_month_picker(frame, body, app);
     draw_year_picker(frame, body, app);
     draw_legend(frame, frame.area(), app);

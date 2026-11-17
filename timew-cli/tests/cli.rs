@@ -342,3 +342,33 @@ fn underscore_tags_are_left_out_of_totals() {
     assert!(day.contains("2:30") && !day.contains("3:30"), "{day}");
     assert!(day.contains("Tracked") && day.contains("2:30:00"), "{day}");
 }
+
+/// Not in Timewarrior: `export :csv`.
+#[test]
+fn export_as_csv() {
+    let db = Db::new();
+    db.ok(&[":yes", "track", "2025-03-03T08:00", "-", "2025-03-03T10:00", "meetings", "team"]);
+    db.ok(&["track", "2025-03-03T10:00", "-", "2025-03-03T10:30", "email"]);
+    db.ok(&["annotate", "@1", "inbox, zero"]);
+    db.ok(&["track", "2025-03-04T09:00", "-", "2025-03-04T09:15", "email"]);
+    let csv = db.ok(&["export", ":csv"]);
+    assert_eq!(
+        csv,
+        "Wk,Date,Day,Tags,Start,End,Time,Total,Annotation\n\
+         W10,2025-03-03,Mon,\"meetings, team\",8:00,10:00,2:00,,\n\
+         W10,2025-03-03,Mon,email,10:00,10:30,0:30,2.50,\"inbox, zero\"\n\
+         W10,2025-03-04,Tue,email,9:00,9:15,0:15,0.25,\n"
+    );
+    let one_day = db.ok(&["export", ":csv", "2025-03-04", "email"]);
+    assert_eq!(one_day.lines().count(), 2, "{one_day}");
+    let semi = db.ok(&["export", ":csv", "2025-03-03", "rc.export.csv.separator=;"]);
+    assert!(semi.starts_with("Wk;Date;Day;") && semi.contains(";meetings, team;8:00;"), "{semi}");
+    let tab = db.ok(&["export", ":csv", "2025-03-04", "rc.export.csv.separator=tab"]);
+    assert!(tab.contains("\tTue\temail\t9:00\t"), "{tab}");
+    let bad = db.fail(&["export", ":csv", "rc.export.csv.separator=;;"]);
+    assert!(bad.contains("export.csv.separator"), "{bad}");
+    fs::write(db.path().join("timewarrior.cfg"), "export.csv.separator = |\n").unwrap();
+    assert!(db.ok(&["export", ":csv", "2025-03-04"]).contains("|Tue|email|"));
+    let by_id = db.ok(&["export", ":csv", "@3"]);
+    assert!(by_id.contains("8:00|10:00") && by_id.lines().count() == 2, "{by_id}");
+}

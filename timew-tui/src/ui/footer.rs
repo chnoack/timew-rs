@@ -78,7 +78,7 @@ pub(crate) fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: boo
         items.extend([("b", "chart"), ("Enter", "details")]);
     }
     items.extend([("e", "edit"), ("a", "add"), ("d", "delete")]);
-    items.extend([("PgUp/Dn", "page"), ("r", "reload"), ("i", "info")]);
+    items.extend([("PgUp/Dn", "page"), ("r", "reload"), ("i", "info"), ("x", "export")]);
 
     // Keep "q quit" at the end; if not everything fits, drop items from
     // the end (the legend lists them all).

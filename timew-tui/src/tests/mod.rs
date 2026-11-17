@@ -4,6 +4,7 @@
 mod chart;
 mod completion;
 mod edit;
+mod export;
 mod filters;
 mod help;
 mod keys;

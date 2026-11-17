@@ -1,5 +1,9 @@
 //! `timew export [<range>] [<tag> ...] | [@<id> ...]`: the intervals as a
-//! JSON array, one object per line, oldest first.
+//! JSON array, one object per line, oldest first. With `:csv`, a table
+//! as CSV instead: the columns of the `timew-tui` table plus the
+//! annotation, one row per interval and day, separated by
+//! `export.csv.separator` (a comma by default; see
+//! [`timew_core::summary::to_csv`]).
 
 use crate::database::Tracked;
 use crate::range::Range;
@@ -11,13 +15,21 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
     if !ids.is_empty() && !tags.is_empty() {
         return Err("You cannot specify both id and tags/range to export intervals.".to_string());
     }
-    let tracked = if ids.is_empty() {
+    // Without a range (or with IDs) the CSV rows span the intervals found.
+    let (range, tracked) = if ids.is_empty() {
         let range = s.cli.range(Range::empty(), s.now)?;
-        s.tracked_in(&range, &tags)?
+        let tracked = s.tracked_in(&range, &tags)?;
+        (range, tracked)
     } else {
-        s.tracked_ids(&ids)?
+        (Range::empty(), s.tracked_ids(&ids)?)
     };
-    s.out.push_str(&json_array(&tracked));
+    if s.cli.has_hint("csv") {
+        use crate::summary::{CSV_SEPARATOR_SETTING, build, csv_separator, to_csv};
+        let separator = csv_separator(s.rules.get(CSV_SEPARATOR_SETTING))?;
+        s.out.push_str(&to_csv(&build(&range, &tracked), separator));
+    } else {
+        s.out.push_str(&json_array(&tracked));
+    }
     Ok(0)
 }
 

@@ -14,6 +14,7 @@ use timew_core::paths::Paths;
 use timew_core::range::Range;
 use timew_core::summary::{self, Summary};
 
+use crate::export::ExportForm;
 use crate::filter::{Filter, MonthPicker, RangeInput, YearPicker, day_range, month_range, year_range};
 use crate::format::local_date;
 use crate::forms::{DeleteDialog, EditForm, FIELDS, StartForm};
@@ -59,6 +60,8 @@ pub(crate) struct App {
     pub(crate) custom_input: (String, String),
     /// Open date-range form.
     pub(crate) range_input: Option<RangeInput>,
+    /// Open CSV export dialog (`x`).
+    pub(crate) export: Option<ExportForm>,
     /// Screen areas of the From/To fields from the last draw (for mouse clicks).
     pub(crate) range_fields: [Rect; 2],
     pub(crate) range_popup: Rect,
@@ -136,6 +139,7 @@ impl App {
             custom_range: Range::empty(),
             custom_input: (String::new(), String::new()),
             range_input: None,
+            export: None,
             range_fields: [Rect::default(); 2],
             range_popup: Rect::default(),
             tag: None,
@@ -226,6 +230,7 @@ impl App {
             && self.month_picker.is_none()
             && self.year_picker.is_none()
             && self.range_input.is_none()
+            && self.export.is_none()
     }
 
     /// Update the times of a running entry (the rows are built for "now").

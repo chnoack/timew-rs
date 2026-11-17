@@ -217,6 +217,9 @@ impl App {
         if self.range_input.is_some() {
             return self.on_range_key(key);
         }
+        if self.export.is_some() {
+            return self.on_export_key(key);
+        }
         let page = self.page.max(1) as isize;
         match key.code {
             KeyCode::Esc if self.chart && !self.wide => self.chart = false,
@@ -230,6 +233,7 @@ impl App {
             KeyCode::Char('i') => self.info = true,
             KeyCode::Char('e') => self.open_edit(),
             KeyCode::Char('a') => self.add_entry(),
+            KeyCode::Char('x') => self.open_export(),
             KeyCode::Char('u') => self.undo_edit(),
             KeyCode::Char('s') => self.start_or_stop(),
             KeyCode::Char('q') => self.quit = true,
@@ -283,8 +287,8 @@ impl App {
 
     pub(crate) fn on_mouse(&mut self, mouse: MouseEvent) {
         let pos = Position::new(mouse.column, mouse.row);
-        if self.confirm_delete.is_some() {
-            return; // only y or n answer it
+        if self.confirm_delete.is_some() || self.export.is_some() {
+            return; // only keys answer these
         }
         if let Some(form) = &mut self.start_form {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind

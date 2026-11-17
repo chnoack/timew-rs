@@ -177,13 +177,39 @@ interval.
 | `day`, `week`, `month` | `:day`, `:week`, `:month` | A chart, one line per day and a cell per hour |
 | `gaps` | `:day` | Untracked time, leaving out excluded time |
 | `tags` | all | The tags used, with `tags.<tag>.description` |
-| `export` | all | JSON, one interval per line |
+| `export` | all | JSON, one interval per line; with `:csv` a CSV table (see below) |
 | `get <dom> ...` | all | Values, space-separated (see below) |
 | `[report] <name>` | all | An extension report |
 
 The default ranges can be changed with `reports.<name>.range` (and
 `reports.range` for all). Reports take a range and tags, or IDs (not
 both).
+
+### `export`
+
+The intervals as JSON, the format `import` reads (Timewarrior's format).
+With the hint `:csv`, a CSV table instead, the same that `timew-tui`
+writes with `x`:
+
+```
+$ timew-cli export :csv 2026-11-16 meetings
+Wk,Date,Day,Tags,Start,End,Time,Total,Annotation
+W47,2026-11-16,Mon,"meetings, team",8:05,10:05,2:00,,
+W47,2026-11-16,Mon,meetings,14:15,15:15,1:00,3.00,"weekly, with notes"
+```
+
+- One row per interval and day (an interval past midnight gets two), with
+  a heading line.
+- Wk, Date and Day on every row, times as `H:MM`, Total (on the last row
+  of a day) in decimal hours, without uncounted (`_tag`) intervals.
+- Fields are separated by a comma, or by `export.csv.separator`: one
+  character (not `"`), or `tab`. Fields with the separator, a quote or a
+  line break are in double quotes.
+
+```
+$ timew-cli config export.csv.separator ';'
+$ timew-cli export :csv :month rc.export.csv.separator=tab   # just this once
+```
 
 ### `summary`
 
@@ -290,6 +316,7 @@ These are deliberate; most fix something the original gets wrong.
 - `dom.rc.<name>` of an unset name is empty instead of an error.
 - `help <command>` without installed man pages shows the command's usage.
 - `info` is new: version, license and project page.
+- `export :csv` is new: a CSV table instead of JSON.
 - Intervals with a tag starting with exactly one underscore (`_break`) are
   left out of the totals of `summary`, `day`, `week` and `month`
   (Timewarrior counts them).

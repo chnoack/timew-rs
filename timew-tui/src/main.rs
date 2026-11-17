@@ -18,6 +18,7 @@
 
 mod app;
 mod entries;
+mod export;
 mod filter;
 mod format;
 mod forms;

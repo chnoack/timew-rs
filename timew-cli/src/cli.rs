@@ -31,7 +31,7 @@ pub const COMMANDS: &[&str] = &[
 pub const BUILTIN_REPORTS: &[&str] = &["day", "month", "summary", "week"];
 
 pub const HINTS: &[&str] = &[
-    ":adjust", ":all", ":annotations", ":no-annotations", ":blank", ":color", ":nocolor", ":day", ":debug", ":fill",
+    ":adjust", ":all", ":annotations", ":no-annotations", ":blank", ":color", ":nocolor", ":csv", ":day", ":debug", ":fill",
     ":fortnight", ":holidays", ":no-holidays", ":ids", ":no-ids", ":lastmonth", ":lastquarter", ":lastweek",
     ":lastyear", ":month", ":quarter", ":quiet", ":tags", ":no-tags", ":today", ":week", ":year", ":yes",
     ":yesterday", ":monday", ":tuesday", ":wednesday", ":thursday", ":friday", ":saturday", ":sunday",
