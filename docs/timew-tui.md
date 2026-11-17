@@ -36,8 +36,12 @@ while the TUI is running. The only writes are saved edits (see
 ╭ Summary · Month · 2026-11-01 – 2026-11-30 ──────╮╭ Entry details ────────────╮
 │  Wk  Date       Day Tags      Start    End  …   ││  ID         @3            │  ← summary + details
 │  W46 2026-11-11 Wed planning  8:00 12:00 4:00 … ││  Tags        planning     │
-╰─────────────────────────────────────────────────╯╰───────────────────────────╯
- Total 7.00 h  ·  2 days  ·  3 intervals  ·  avg/day 3.50 h  ·  row 1/3        ← status
+│                                                 │╰───────────────────────────╯
+│                                                 │╭ Month · … ───────────────╮
+│                                                 ││  planning  ████  4.00 h  │  ← hours per tag
+│                                                 ││  Total 7.00 h            │    and totals
+│                                                 ││  2 days  ·  3 intervals  │
+╰──────────────────────────────────────── row 1/3 ╯╰───────────────────────────╯
  ↑↓ move  1-4 range  ⇧1/⇧3/⇧4 pick  5 range  6 tag  …  q quit              ← help
 ```
 
@@ -75,14 +79,22 @@ while the TUI is running. The only writes are saved edits (see
 - **Key legend:** `?` opens a window listing every key, mouse action and
   popup key. In a low window it scrolls (`↑↓`, `PgUp`/`PgDn`, `Ctrl+F`/`Ctrl+B`, `g`/`G`, or
   the mouse wheel). `?`, `Esc`, `q`, `Enter` or a click closes it.
-- **Status line:** the total, the number of days with entries, the number of
-  rows, the average per day with entries, and your position in the list.
-  It always shows these; messages go to their own panel.
+- **Totals:** below the bars of the **Hours** view: the total, the number
+  of days with entries, the number of rows and the average per day with
+  entries. When the Hours view is hidden (narrow window without `b`, or
+  nothing to select) or too low for them, a **status line** at the bottom
+  shows them instead. Your position in the list (`row 1/3`) is on the
+  table's bottom border.
+- **Gaps:** when one day is shown (`1`, `2` or Shift+1), the totals also
+  show the untracked time between the day's entries, right after the
+  total: `Total 7.00 h  ·  Gaps 0.50 h`. Only gaps between two entries
+  count (the ones marked with the dashed line), not the time before the
+  first or after the last entry.
 - **Messages:** the result of the last action ("Saved.", "Deleted. u
   undoes it.", or what went wrong, in red) is shown in the **Messages**
   panel until the next key. The panel is only there while there is a
   message; otherwise the view above it takes its room. In a wide window it
-  is at the bottom of the right column, below "Hours per tag"; in a narrow
+  is at the bottom of the right column, below "Hours"; in a narrow
   window below the list. Long messages wrap (up to three lines).
 - **Average per day** counts only days that have entries.
 
@@ -250,7 +262,7 @@ Tags         meetings pl|anning
 - A tag with a space needs quotes: after `"de`, `"deep work"` is suggested,
   including the closing quote.
 
-### Hours-per-tag chart
+### Hours view
 
 A **bar chart of the hours per tag**, where it appears depending on the
 window width:
@@ -261,12 +273,16 @@ window width:
 | **Narrow** | Shown below the table after `b`, in place of the details. `b` or `Esc` closes it, and `Enter` switches the panel to the details. |
 
 ```
-╭ Hours per tag ───────────────────────────────────────────╮
+╭ Month · 2025-03-01 – 2025-03-31 ─────────────────────────╮
 │  meetings      ███████████████  30.42 h  +7.50 h   18 %  │
 │  team          ██████████▌█▋    26.65 h  +5.35 h   16 %  │
 │  email         ██████████▏▌     25.65 h  +3.35 h   15 %  │
 │  …                                                       │
-│  Total 167.67 h    █ own share  █ shared (+)             │
+│                                                          │
+│  █ own share  █ shared (+)                               │
+│  Total 167.67 h                                          │
+│                                                          │
+│  21 days  ·  206 intervals  ·  avg/day 7.98 h            │
 ╰──────────────────────────────────────────────────────────╯
 ```
 
@@ -307,10 +323,16 @@ is the tag's strong color and the second part a lighter shade of it.)
   tag's color can change when the filters change.
 - **Space:** in a narrow window, at most 10 tags are shown. In a wide window,
   the chart uses the height left below the details. If that isn't enough
-  for every tag, the total line is dropped first, then the smallest tags are
-  summed up as "… N more tags", and the title shows the total number of
-  tags ("Hours per tag · 8"). If the window is too low for even one bar,
-  the chart is hidden.
+  for every tag, the totals below the bars move to the status line first,
+  then the smallest tags are summed up as "… N more tags", and the title
+  shows the total number of tags ("· 8 tags"). If the window is too low for
+  even one bar, the view is hidden.
+- **Title:** the period and the tag filter, like the table's title (without
+  a name).
+- **Below the bars:** the legend of the two shades (only when there is
+  shared time), the total (and the gaps of a day), and on the **last line
+  of the view** the number of days and intervals and the average per day.
+  Free space in a tall view goes between the total and that last line.
 
 ## Keys
 
@@ -328,7 +350,7 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `a` | **Add** an entry right after the selected one (see [Adding an entry](#adding-an-entry)) |
 | `d` | **Delete** the selected entry, after asking (`y` deletes) |
 | `u` | **Undo** the last saved edit, addition, start, stop or delete (only shown while there is one) |
-| `b` | Show or hide the **hours-per-tag chart** (narrow layout; the wide layout always shows it) |
+| `b` | Show or hide the **Hours view** (hours per tag and totals; narrow layout, the wide layout always shows it) |
 | `1` | Today |
 | `2` | Yesterday |
 | `3` / `m` | The current month |
@@ -423,9 +445,9 @@ The code is in `timew-tui/src/`, split by responsibility:
 | `ui/mod.rs` | `draw`: the layout, header, filter bar, shared colors and paddings |
 | `ui/table.rs` | The summary table: columns, week colors, gap lines |
 | `ui/details.rs` | The details panel and the edit form in it |
-| `ui/chart.rs` | The hours-per-tag chart |
+| `ui/chart.rs` | The Hours view: hours per tag and the totals |
 | `ui/popups.rs` | Lists, forms, the delete dialog, the info dialog and the key legend |
-| `ui/footer.rs` | The messages panel, the status line and the help line |
+| `ui/footer.rs` | The messages panel, the status line (when the Hours view can't show the totals) and the help line |
 | `tests/` | The tests, by topic (`filters`, `layout`, `chart`, `help`, `edit`, `tracking`), with shared helpers in `tests/mod.rs`; `timew-tui/tests/version.rs` runs the binary |
 
 ### State

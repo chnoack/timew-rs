@@ -191,10 +191,10 @@ fn messages_have_their_own_panel() {
     let screen = render_at(&mut app, 140, 34);
     println!("{screen}");
     let messages = screen.lines().position(|l| l.contains("Messages")).unwrap();
-    let chart = screen.lines().position(|l| l.contains("Hours per tag")).unwrap();
+    let chart = screen.lines().position(|l| l.contains("╭ Day · ")).unwrap();
     assert!(messages > chart, "below the chart");
     assert!(screen.lines().nth(messages + 2).unwrap().contains("Saved."));
-    assert!(status(&screen).starts_with(" Total "), "the status line keeps the totals: {}", status(&screen));
+    assert!(screen.contains("Total 2.50 h"), "the Hours view keeps the totals:\n{screen}");
     // narrow: a panel below the list, only while there is a message
     press(&mut app, 'u');
     let screen = render_at(&mut app, 90, 24);
@@ -316,5 +316,45 @@ fn gap_lines_follow_scrolling() {
         checked += 1;
     }
     assert!(checked >= 10 && app.table.offset() > 0, "scrolled: {checked} rows, offset {}", app.table.offset());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn day_view_shows_the_gaps_between_entries() {
+    let root = env::temp_dir().join(format!("timew-tui-test-gapsum-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("data")).unwrap();
+    let today = jiff::Zoned::now().date();
+    // 08:00-10:00, 10:30-11:00, 12:00-13:00: gaps of 0:30 and 1:00
+    let lines = format!(
+        "inc {} - {} # a\ninc {} - {} # b\ninc {} - {} # c\n",
+        today_at(8, 0),
+        today_at(10, 0),
+        today_at(10, 30),
+        today_at(11, 0),
+        today_at(12, 0),
+        today_at(13, 0)
+    );
+    fs::write(root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month())), lines).unwrap();
+    let mut app = App::new(root.clone());
+    press(&mut app, '1');
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    let y = (0..buf.area.height)
+        .find(|y| (0..buf.area.width).map(|x| buf[(x, *y)].symbol()).collect::<String>().starts_with(" Total "))
+        .unwrap();
+    let status: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+    // not before the first or after the last entry
+    assert!(status.starts_with(" Total 3.50 h  ·  Gaps 1.50 h  ·  1 day"), "{status}");
+    let x = status.find("1.50").unwrap() as u16;
+    assert_eq!(buf[(x, y)].fg, Color::Reset, "the gaps in the regular color");
+
+    // only in a day view
+    press(&mut app, '3');
+    assert!(!render_at(&mut app, 140, 24).contains("Gaps"));
+    press(&mut app, '2');
+    assert!(render_at(&mut app, 140, 24).contains("Gaps 0.00 h"), "yesterday is a day too");
     let _ = fs::remove_dir_all(&root);
 }

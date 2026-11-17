@@ -17,7 +17,7 @@ use crate::app::{App, Button};
 use crate::filter::Filter;
 use crate::format::range_label;
 use crate::forms::{Completion, tags_to_text};
-use crate::ui::chart::{chart_height, draw_chart, tag_totals};
+use crate::ui::chart::{chart_fit, chart_height, draw_chart, tag_totals};
 use crate::ui::details::draw_details;
 use crate::ui::footer::{draw_help, draw_messages, draw_status, messages_height};
 use crate::ui::popups::{
@@ -60,14 +60,9 @@ pub(crate) fn text_field(text: String, suggestion: Option<&str>, width: usize, a
 }
 
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
-    let [header, filters, body, status, help] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    let [header, filters, body, help] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(3), Constraint::Min(3), Constraint::Length(1)])
+            .areas(frame.area());
 
     draw_header(frame, header, app);
     draw_filters(frame, filters, app);
@@ -75,9 +70,16 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let table_w = table_width(&app.summary).max(summary_title(app).width() as u16 + 4);
     app.wide = body.width >= table_w + DETAILS_MIN_WIDTH;
     let has_selection = app.selected().is_some();
+    // The totals are shown below the bars of the Hours view; when that view
+    // is hidden or too low for them, a status line at the bottom shows them.
+    let mut body = body;
+    if !hours_shows_figures(app, body, table_w, has_selection) {
+        let [rest, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(body);
+        draw_status(frame, status, app);
+        body = rest;
+    }
     // Outside the side column (narrow window, or nothing selected), a
     // message gets its own panel below everything else in the body.
-    let mut body = body;
     if !(app.wide && has_selection) && app.notice.is_some() {
         let h = messages_height(app, body.width);
         let [rest, messages] = Layout::vertical([Constraint::Min(3), Constraint::Length(h)]).areas(body);
@@ -118,7 +120,6 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         draw_summary(frame, body, app);
     }
-    draw_status(frame, status, app);
     draw_help(frame, help, app.wide, app.last_edit.is_some(), app.running.is_some());
     draw_picker(frame, body, app);
     draw_range_input(frame, body, app);
@@ -128,6 +129,24 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     draw_start_form(frame, body, app);
     draw_confirm_delete(frame, body, app);
     draw_info(frame, frame.area(), app);
+}
+
+/// Whether the Hours view will be drawn into `body` with room for the
+/// figures below its bars (the same decisions as in `draw`).
+fn hours_shows_figures(app: &App, body: Rect, table_w: u16, has_selection: bool) -> bool {
+    let totals = tag_totals(app);
+    if app.wide && has_selection {
+        let side_w = body.width.saturating_sub(table_w).max(DETAILS_MIN_WIDTH);
+        let messages_h = if app.notice.is_some() { messages_height(app, side_w) } else { 0 };
+        let chart_h = body.height.saturating_sub(DETAILS_HEIGHT + messages_h);
+        chart_h >= 3 + PAD.top + PAD.bottom && chart_fit(app, &totals, chart_h).1
+    } else if !app.wide && app.chart && app.edit.is_none() && has_selection {
+        let messages_h = if app.notice.is_some() { messages_height(app, body.width) } else { 0 };
+        let room = body.height.saturating_sub(messages_h).saturating_sub(5);
+        chart_fit(app, &totals, chart_height(&totals).min(room)).1
+    } else {
+        false
+    }
 }
 
 /// Inner spacing between a view's frame and its content.

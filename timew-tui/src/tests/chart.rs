@@ -17,11 +17,15 @@ fn bar_chart_of_hours_per_tag() {
     assert!(title.contains("Entry details"));
     let lines: Vec<&str> = screen.lines().collect();
     let row = |s: &str| lines.iter().position(|l| l.contains(s)).unwrap();
-    assert!(row("Hours per tag ─") > row("Duration"), "chart below the details");
-    assert!(!screen.contains("Hours per tag ·"), "all tags shown: no count");
+    assert!(row("╭ Year · ") > row("Duration"), "chart below the details, titled with the period only");
+    assert!(!screen.contains(" tags "), "all tags shown: no count");
+    assert!(!screen.contains("Hours"), "the view's title is just the period");
+    // the totals are in the Hours view, so there is no status line
+    assert!(screen.contains("1 day") || screen.contains("2 days"), "{screen}");
+    assert!(!screen.lines().rev().nth(1).unwrap().starts_with(" Total "));
     // b and Esc don't hide it in the wide layout; Esc quits
     press(&mut app, 'b');
-    assert!(render_at(&mut app, 140, 34).contains("Hours per tag"));
+    assert!(render_at(&mut app, 140, 34).contains("╭ Year · "));
     let planning = chart_line(&screen, "planning");
     assert!(planning.contains("4.00 h") && planning.contains("57 %"));
     assert!(screen.contains("Total 7.00 h"));
@@ -36,12 +40,16 @@ fn bar_chart_of_hours_per_tag() {
 
     // narrow: b shows the chart below the table; Esc closes it, Enter switches to details
     render(&mut app); // the window is now narrow
-    assert!(!app.wide && !render(&mut app).contains("Hours per tag"));
-    press(&mut app, 'b');
     let screen = render(&mut app);
+    assert!(!app.wide && !screen.contains("╭ Day · "));
+    // without the Hours view, the status line shows the totals
+    assert!(screen.lines().rev().nth(1).unwrap().starts_with(" Total 3.00 h  ·  Gaps 0.00 h"), "{screen}");
+    press(&mut app, 'b');
+    let screen = render_at(&mut app, 90, 30);
     println!("{screen}");
     let title = screen.lines().find(|l| l.contains("Summary · Day")).unwrap();
-    assert!(!title.contains("Hours per tag") && screen.contains("Hours per tag ─"));
+    assert!(!title.contains("╭ Day · ") && screen.contains("╭ Day · "));
+    assert!(!screen.lines().rev().nth(1).unwrap().starts_with(" Total "), "the Hours view has the totals:\n{screen}");
     key(&mut app, KeyCode::Esc);
     assert!(!app.chart && !app.quit);
     press(&mut app, 'b');
@@ -103,23 +111,40 @@ fn wide_chart_shrinks_in_low_windows() {
     let root = sample_db("low");
     let mut app = App::new(root.clone());
     press(&mut app, '4');
-    // room for everything
-    let screen = render_at(&mut app, 140, 27);
-    assert!(chart_line(&screen, "email").contains('█') && screen.contains("Total 7.00 h  "));
-    // enough for the three bars, not for the total line
-    let screen = render_at(&mut app, 140, 25);
-    println!("{screen}");
-    assert!(chart_line(&screen, "email").contains('█'));
-    assert!(!screen.lines().any(|l| l.contains("││  Total")));
-    // one bar and a "more" line
-    let screen = render_at(&mut app, 140, 24);
-    println!("{screen}");
-    assert!(chart_line(&screen, "planning").contains('█'));
-    assert!(screen.contains("… 2 more tags, 3.00 h"));
-    assert!(screen.contains("Hours per tag · 3"), "count shown when tags are cut off");
-    // too low for the chart: details only
-    let screen = render_at(&mut app, 140, 22);
-    assert!(screen.contains("Entry details") && !screen.contains("Hours per tag"));
+    // from a tall window to a low one: everything; the bars without the
+    // figures (then the status line shows them); one bar and a "more"
+    // line; no Hours view at all
+    #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+    enum State {
+        Everything,
+        BarsOnly,
+        Cut,
+        NoChart,
+    }
+    let mut seen = Vec::new();
+    for height in (15..=40).rev() {
+        let screen = render_at(&mut app, 140, height);
+        let status = screen.lines().rev().nth(1).unwrap().starts_with(" Total ");
+        let state = if !screen.contains("╭ Year · ") {
+            State::NoChart
+        } else if screen.contains(" more tags, ") {
+            assert!(screen.contains("· 3 tags"), "count shown when tags are cut off");
+            State::Cut
+        } else if screen.lines().any(|l| l.contains("avg/day") && l.contains("││")) {
+            State::Everything
+        } else {
+            State::BarsOnly
+        };
+        // the status line exactly when the Hours view doesn't show the totals
+        assert_eq!(status, state != State::Everything, "height {height}: {state:?}\n{screen}");
+        if state == State::Everything {
+            assert!(chart_line(&screen, "email").contains('█') && screen.contains("Total 7.00 h"));
+        }
+        if seen.last() != Some(&state) {
+            seen.push(state);
+        }
+    }
+    assert_eq!(seen, [State::Everything, State::BarsOnly, State::Cut, State::NoChart]);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -253,5 +278,25 @@ fn underscore_tags_are_left_out_of_the_totals() {
     let other = text.iter().position(|l| l.contains("email") && l.contains("12:00")).unwrap() as u16;
     let x2 = time_x(&text[other as usize]);
     assert_ne!(buf[(x2, other)].fg, Color::Indexed(244));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn figures_below_the_bars_in_order() {
+    let root = env::temp_dir().join(format!("timew-tui-test-figures-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("data")).unwrap();
+    let today = jiff::Zoned::now().date();
+    // a shared entry, so the legend is shown
+    let lines = format!("inc {} - {} # email meetings\ninc {} - {} # email\n", today_at(8, 0), today_at(9, 0), today_at(9, 0), today_at(10, 0));
+    fs::write(root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month())), lines).unwrap();
+    let mut app = App::new(root.clone());
+    press(&mut app, '1');
+    let screen = render_at(&mut app, 140, 34);
+    println!("{screen}");
+    let row = |s: &str| screen.lines().position(|l| l.contains(s)).unwrap_or_else(|| panic!("{s} missing"));
+    // the legend above the total, days/intervals/average last
+    assert!(row("own share") < row("Total 2.00 h") && row("Total 2.00 h") < row("avg/day"));
+    assert!(screen.lines().nth(row("avg/day") + 1).unwrap().contains("╰"), "the last line of the view");
     let _ = fs::remove_dir_all(&root);
 }

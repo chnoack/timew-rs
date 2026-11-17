@@ -1,5 +1,5 @@
-//! The bottom of the screen: the messages panel, the status line and the
-//! help line.
+//! The bottom of the screen: the messages panel, the status line (when
+//! the Hours view can't show the totals) and the help line.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -8,7 +8,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
 use crate::app::App;
+use crate::filter::Filter;
 use crate::format::decimal_hours;
+use crate::ui::table::gap_seconds;
 use crate::ui::{ACCENT, PAD};
 
 /// Height of the messages panel for an area `width` columns wide: the
@@ -30,28 +32,30 @@ pub(crate) fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);
 }
 
+/// The status line: the figures of the Hours view, shown at the bottom
+/// when that view is hidden or too low for them.
 pub(crate) fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let days = app.summary.rows.iter().filter(|r| r.date.is_some()).count();
     let intervals = app.summary.rows.len();
     let total = app.summary.grand_total;
     let avg = if days > 0 { format!("{} h", decimal_hours(total / days as i64)) } else { "-".into() };
-    let pos = match app.table.selected() {
-        Some(i) if intervals > 0 => format!("row {}/{}", i + 1, intervals),
-        _ => String::new(),
-    };
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw(" Total "),
         Span::styled(format!("{} h", decimal_hours(total)), Style::new().fg(Color::Yellow).bold()),
+    ];
+    // a single day: also the gaps between its entries
+    if matches!(app.filter, Filter::Day | Filter::Yesterday) {
+        spans.push(Span::raw(format!("  ·  Gaps {} h", decimal_hours(gap_seconds(app)))));
+    }
+    spans.extend([
         Span::raw(format!(
             "  ·  {days} {}  ·  {intervals} {}  ·  avg/day ",
             if days == 1 { "day" } else { "days" },
             if intervals == 1 { "interval" } else { "intervals" },
         )),
         Span::styled(avg, Style::new().bold()),
-        Span::raw("  ·  "),
-        Span::styled(pos, Style::new().dim()),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 pub(crate) fn draw_help(frame: &mut Frame, area: Rect, wide: bool, can_undo: bool, running: bool) {

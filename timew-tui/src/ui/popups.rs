@@ -324,7 +324,7 @@ pub(crate) fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("6", "tag list"),
         h("Panels"),
         k("Enter", "details (narrow window)"),
-        k("b", "hours-per-tag chart (narrow window)"),
+        k("b", "Hours: hours per tag and totals (narrow window)"),
         k("Esc", "close the chart / details (narrow window)"),
         h("Editing"),
         k("e", "edit start, end, tags and annotation of the entry"),

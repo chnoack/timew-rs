@@ -268,8 +268,8 @@ differently in a few places. The ones you are most likely to notice:
   exactly one underscore (`_break`, `_private`; not `__x` or `x_y`) is
   still listed, but left out of all totals: the daily and grand totals of
   `summary`, the totals and the "Tracked" line of `day`, `week` and
-  `month`, and in `timew-tui` the Total column, the status line and the
-  chart's total and percentages. The whole entry is left out, also when it
+  `month`, and in `timew-tui` the Total column and the totals and
+  percentages of the Hours view. The whole entry is left out, also when it
   has other tags (`_break meetings`). Timewarrior has no such rule and
   treats these as ordinary tags, so **on the same database its totals
   include these entries** and are higher.

@@ -22,7 +22,7 @@ fn question_mark_opens_the_key_legend() {
     assert_eq!(app.legend, Some(0));
     let screen = render_at(&mut app, 100, 66);
     println!("{screen}");
-    assert!(screen.contains(" Keys ") && screen.contains("Periods") && screen.contains("hours-per-tag chart"));
+    assert!(screen.contains(" Keys ") && screen.contains("Periods") && screen.contains("Hours: hours per tag and totals"));
     // every line fits at this height: no scrolling
     press(&mut app, 'j');
     render_at(&mut app, 100, 66);

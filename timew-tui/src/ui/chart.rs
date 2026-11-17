@@ -1,4 +1,5 @@
-//! The hours-per-tag bar chart.
+//! The Hours view: a bar chart of the hours per tag, and below it the
+//! totals (total, gaps of a day, days, intervals, average per day).
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -8,7 +9,9 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use timew_core::interval::is_uncounted_tag;
 
 use crate::app::App;
+use crate::filter::Filter;
 use crate::format::{decimal_hours, decimal_hours_f, parse_hms};
+use crate::ui::table::{gap_seconds, period_title};
 use crate::ui::{ACCENT, PAD};
 
 /// Colors of the chart bars as (strong, light) pairs from the 256-color
@@ -104,9 +107,58 @@ const CHART_MAX_BARS: usize = 10;
 /// Height of the bottom chart panel for `totals`.
 pub(crate) fn chart_height(totals: &[TagTotal]) -> u16 {
     let bars = totals.len().clamp(1, CHART_MAX_BARS) as u16;
-    // bars + an "… more" line if cut off + blank + total line + borders + padding
+    // bars + an "… more" line if cut off + the figures below + borders + padding
     let more = u16::from(totals.len() > CHART_MAX_BARS);
-    bars + more + 2 + 2 + PAD.top + PAD.bottom
+    let shared = totals.iter().any(|t| t.shared > 0.0);
+    bars + more + figures_height(shared) + 2 + PAD.top + PAD.bottom
+}
+
+/// Lines of the figures below the bars: a blank line, the legend if there
+/// is shared time, the total (and the gaps of a day), and
+/// days/intervals/average.
+fn figures_height(shared: bool) -> u16 {
+    3 + u16::from(shared)
+}
+
+/// The figures below the bars (what the status line used to show).
+fn figures(app: &App, shared: bool) -> Vec<Line<'static>> {
+    let total = app.summary.grand_total;
+    let days = app.summary.rows.iter().filter(|r| r.date.is_some()).count();
+    let intervals = app.summary.rows.len();
+    let avg = if days > 0 { format!("{} h", decimal_hours(total / days as i64)) } else { "-".into() };
+    let mut first = vec![
+        Span::styled("Total ", Style::new().dim()),
+        Span::styled(format!("{} h", decimal_hours(total)), Style::new().fg(Color::Yellow).bold()),
+    ];
+    // a single day: also the gaps between its entries
+    if matches!(app.filter, Filter::Day | Filter::Yesterday) {
+        first.push(Span::styled("  ·  Gaps ", Style::new().dim()));
+        first.push(Span::raw(format!("{} h", decimal_hours(gap_seconds(app)))));
+    }
+    let mut lines = vec![Line::raw("")];
+    if shared {
+        // legend for the two shades, above the total
+        lines.push(Line::from(vec![
+            Span::styled("█", Style::new().fg(GRAY_COLORS.0)),
+            Span::styled(" own share  ", Style::new().dim()),
+            Span::styled("█", Style::new().fg(GRAY_COLORS.1)),
+            Span::styled(" shared (+)", Style::new().dim()),
+        ]));
+    }
+    lines.push(Line::from(first));
+    // days, intervals and the average last
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(
+                "{days} {}  ·  {intervals} {}  ·  avg/day ",
+                if days == 1 { "day" } else { "days" },
+                if intervals == 1 { "interval" } else { "intervals" },
+            ),
+            Style::new().dim(),
+        ),
+        Span::styled(avg, Style::new().bold()),
+    ]));
+    lines
 }
 
 /// A stacked bar of `width` cells using eighth blocks: the first `strong_frac`
@@ -143,6 +195,27 @@ pub(crate) fn stacked_bar(strong_frac: f64, light_frac: f64, width: usize, stron
     spans
 }
 
+/// How the chart fits into a panel `height` lines high: the number of bars
+/// shown, and whether the figures below them (total etc.) fit too. All bars
+/// plus the figures if possible, else without the figures, else as many
+/// bars as fit plus a "… more" line.
+pub(crate) fn chart_fit(app: &App, totals: &[TagTotal], height: u16) -> (usize, bool) {
+    let avail = height.saturating_sub(2 + PAD.top + PAD.bottom) as usize;
+    let limit = if app.wide { usize::MAX } else { CHART_MAX_BARS };
+    let n = totals.len();
+    let figures_h = figures_height(totals.iter().any(|t| t.shared > 0.0)) as usize;
+    let fits = |bars: usize, more: bool, total: bool| bars + usize::from(more) + figures_h * usize::from(total) <= avail;
+    if n <= limit && fits(n, false, true) {
+        (n, true)
+    } else if n > limit && fits(limit, true, true) {
+        (limit, true)
+    } else if n <= limit && fits(n, false, false) {
+        (n, false)
+    } else {
+        (avail.saturating_sub(1).min(limit), false)
+    }
+}
+
 pub(crate) fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
     let totals = tag_totals(app);
     let block = Block::bordered()
@@ -151,32 +224,19 @@ pub(crate) fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
         .title_bottom(if app.wide { Line::raw("") } else { Line::from(" b/Esc close ").right_aligned().dim() })
         .padding(PAD);
     let inner = block.inner(area);
-
-    // Fit the bars into the panel: all bars plus the total line if possible,
-    // else without the total, else as many bars as fit plus a "… more" line.
-    let avail = inner.height as usize;
-    let limit = if app.wide { usize::MAX } else { CHART_MAX_BARS };
+    let (shown, show_total) = chart_fit(app, &totals, area.height);
     let n = totals.len();
-    let fits = |bars: usize, more: bool, total: bool| bars + usize::from(more) + 2 * usize::from(total) <= avail;
-    let (shown, show_total) = if n <= limit && fits(n, false, true) {
-        (n, true)
-    } else if n > limit && fits(limit, true, true) {
-        (limit, true)
-    } else if n <= limit && fits(n, false, false) {
-        (n, false)
-    } else {
-        (avail.saturating_sub(1).min(limit), false)
-    };
-    // the number of tags only matters when not all of them are shown
-    let block = if shown < n {
-        block.title(format!(" Hours per tag · {n} "))
-    } else {
-        block.title(" Hours per tag ")
-    };
+    let any_shared = totals.iter().any(|t| t.shared > 0.0);
+    // the period like the table's title; the number of tags only when not
+    // all of them are shown
+    let mut title = period_title(None, app);
+    if shown < n {
+        title.spans.push(Span::raw(format!("· {n} tags ")));
+    }
+    let block = block.title(title);
     // bars are scaled to the largest full time (share + shared)
     let max = totals.iter().map(|t| t.share + t.shared).fold(0.0, f64::max).max(1.0);
     let sum = app.summary.grand_total as f64;
-    let any_shared = totals.iter().any(|t| t.shared > 0.0);
     let name_w = totals.iter().take(shown).map(|t| t.tag.chars().count()).max().unwrap_or(0);
     let value_w = totals.iter().take(shown).map(|t| decimal_hours_f(t.share).len()).max().unwrap_or(4);
     let shared_w =
@@ -225,22 +285,12 @@ pub(crate) fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::styled("No entries.", Style::new().dim()));
     }
     if show_total {
-        lines.push(Line::raw(""));
-        let mut total = vec![
-            Span::styled("Total ", Style::new().dim()),
-            Span::styled(format!("{} h", decimal_hours(app.summary.grand_total)), Style::new().fg(Color::Yellow).bold()),
-        ];
-        if any_shared {
-            // legend for the two shades
-            total.extend([
-                Span::raw("    "),
-                Span::styled("█", Style::new().fg(GRAY_COLORS.0)),
-                Span::styled(" own share  ", Style::new().dim()),
-                Span::styled("█", Style::new().fg(GRAY_COLORS.1)),
-                Span::styled(" shared (+)", Style::new().dim()),
-            ]);
-        }
-        lines.push(Line::from(total));
+        lines.extend(figures(app, any_shared));
+        // days/intervals/average on the last line of the view: free space
+        // goes above it
+        let free = (inner.height as usize).saturating_sub(lines.len());
+        let last = lines.len() - 1;
+        lines.splice(last..last, std::iter::repeat_n(Line::raw(""), free));
     }
 
     frame.render_widget(Clear, area);

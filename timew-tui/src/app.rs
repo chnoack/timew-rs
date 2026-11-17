@@ -94,7 +94,8 @@ pub(crate) struct App {
     pub(crate) details: bool,
     /// Whether the last draw used the wide (side-by-side) layout.
     pub(crate) wide: bool,
-    /// Whether the hours-per-tag bar chart is shown (in place of the details).
+    /// Whether the Hours view (hours per tag and totals) is shown in a narrow
+    /// window (in place of the details).
     pub(crate) chart: bool,
     /// Whether the info dialog (`i`) is open.
     pub(crate) info: bool,

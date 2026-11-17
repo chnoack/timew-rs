@@ -41,6 +41,22 @@ pub(crate) fn gap_after(app: &App) -> Vec<bool> {
         .collect()
 }
 
+/// The untracked time between entries of the same day, in seconds: the
+/// sum of the gaps marked by `gap_after` (not before the first or after the
+/// last entry of a day).
+pub(crate) fn gap_seconds(app: &App) -> i64 {
+    let rows = &app.summary.rows;
+    gap_after(app)
+        .iter()
+        .enumerate()
+        .filter(|(_, gap)| **gap)
+        .map(|(i, _)| {
+            let (this, next) = (&app.tracked[rows[i].source].interval, &app.tracked[rows[i + 1].source].interval);
+            next.range.start - this.range.end
+        })
+        .sum()
+}
+
 /// For each summary row, 0 or 1: flips whenever the ISO week (week-year +
 /// week number) of the row's day changes, so consecutive weeks alternate.
 /// Rows without a date belong to the day (and week) of the row above.
@@ -101,8 +117,15 @@ pub(crate) fn table_width(summary: &Summary) -> u16 {
 
 /// The summary frame's title, e.g. " Summary · Month · 2026-11-01 – 2026-11-30 · tag meetings ".
 pub(crate) fn summary_title(app: &App) -> Line<'static> {
+    period_title(Some("Summary"), app)
+}
+
+/// A view's title with the shown period (and tag filter), like
+/// ` Summary · Month · 2026-11-01 – 2026-11-30 `, or without a name
+/// ` Month · 2026-11-01 – 2026-11-30 `.
+pub(crate) fn period_title(name: Option<&str>, app: &App) -> Line<'static> {
     let mut spans = vec![
-        Span::raw(" Summary · "),
+        Span::raw(name.map_or(" ".to_string(), |n| format!(" {n} · "))),
         Span::styled(app.filter.label(), Style::new().fg(ACCENT).bold()),
         Span::raw(format!(" · {} ", range_label(&app.range))),
     ];
@@ -116,7 +139,11 @@ pub(crate) fn draw_summary(frame: &mut Frame, area: Rect, app: &mut App) {
     let title = summary_title(app);
     // the view with the focus has a yellow border (like the edit form)
     let border = if app.table_has_focus() { Style::new().fg(FOCUS) } else { Style::new() };
-    let block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(border).title(title).padding(PAD);
+    let mut block = Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(border).title(title).padding(PAD);
+    // the position in the list, on the bottom border
+    if let Some(i) = app.table.selected().filter(|_| !app.summary.rows.is_empty()) {
+        block = block.title_bottom(Line::from(format!(" row {}/{} ", i + 1, app.summary.rows.len())).right_aligned().dim());
+    }
 
     if let Some(err) = &app.error {
         let p = Paragraph::new(format!("Error reading database:\n{err}")).fg(Color::Red).block(block);
