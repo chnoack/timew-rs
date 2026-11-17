@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use timew_core::rules::Rules;
-use timew_core::summary;
+use timew_core::summary::{self, CsvFormat};
 
 use crate::app::App;
 use crate::format::local_date;
@@ -71,22 +71,23 @@ impl App {
         }
     }
 
-    /// `export.csv.separator` from `timewarrior.cfg` (read at each export,
-    /// so a changed setting applies without a restart).
-    pub(crate) fn csv_separator(&self) -> Result<char, String> {
+    /// `export.csv.separator` and `export.csv.decimal` from
+    /// `timewarrior.cfg` (read at each export, so a changed setting applies
+    /// without a restart).
+    pub(crate) fn csv_format(&self) -> Result<CsvFormat, String> {
         let file = self.edit_paths().config_file();
         if !file.exists() {
-            return Ok(',');
+            return Ok(CsvFormat::default());
         }
         let rules = Rules::load(&file)?;
-        summary::csv_separator(rules.get(summary::CSV_SEPARATOR_SETTING))
+        CsvFormat::from_settings(|name| rules.get(name))
     }
 
     fn write_export(&mut self) {
         if self.export.is_none() {
             return;
         }
-        let separator = self.csv_separator();
+        let format = self.csv_format();
         let Some(form) = &mut self.export else { return };
         let input = form.path.trim();
         if input.is_empty() {
@@ -103,11 +104,11 @@ impl App {
             form.confirm_overwrite = true;
             return;
         }
-        let separator = match separator {
-            Ok(c) => c,
+        let format = match format {
+            Ok(f) => f,
             Err(e) => return form.error = Some(e),
         };
-        match std::fs::write(&path, summary::to_csv(&self.summary, separator)) {
+        match std::fs::write(&path, summary::to_csv(&self.summary, format)) {
             Ok(()) => {
                 let shown = std::path::absolute(&path).unwrap_or(path);
                 let n = self.summary.rows.len();

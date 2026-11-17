@@ -68,18 +68,30 @@ fn export_uses_the_separator_setting() {
     let root = sample_db("export-separator");
     let mut app = App::new(root.clone());
     app.config_dir = root.clone();
-    fs::write(root.join("timewarrior.cfg"), "export.csv.separator = ;\n").unwrap();
+    fs::write(root.join("timewarrior.cfg"), "export.csv.separator = ;\nexport.csv.decimal = ,\n").unwrap();
     press(&mut app, '1');
     press(&mut app, 'x');
     let screen = render_at(&mut app, 100, 24);
-    assert!(screen.contains("Separator: ; (export.csv.separator)"), "{screen}");
+    assert!(screen.contains("Separator ;  ·  decimal ,  (export.csv.*)"), "{screen}");
     let file = root.join("semi.csv");
     clear_field(&mut app);
     type_text(&mut app, file.to_str().unwrap());
     key(&mut app, KeyCode::Enter);
     let csv = fs::read_to_string(&file).unwrap();
+    assert!(!csv.starts_with('\u{feff}'));
     assert!(csv.starts_with("Wk;Date;Day;Tags;Start;End;Time;Total;Annotation\n"), "{csv}");
     assert!(csv.contains(";meetings;8:00;10:00;2:00;;"), "{csv}");
+    assert!(csv.contains(";email;10:00;11:00;1:00;3,00;"), "{csv}");
+
+    // with the byte-order mark for Excel
+    fs::write(root.join("timewarrior.cfg"), "export.csv.bom = on\n").unwrap();
+    press(&mut app, 'x');
+    assert!(render_at(&mut app, 100, 24).contains("Separator ,  ·  decimal .  ·  BOM"));
+    clear_field(&mut app);
+    let file = root.join("bom.csv");
+    type_text(&mut app, file.to_str().unwrap());
+    key(&mut app, KeyCode::Enter);
+    assert!(fs::read(&file).unwrap().starts_with(&[0xEF, 0xBB, 0xBF, b'W', b'k', b',']));
 
     // an invalid value is reported in the dialog, nothing is written
     fs::write(root.join("timewarrior.cfg"), "export.csv.separator = ;;\n").unwrap();

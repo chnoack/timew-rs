@@ -2,7 +2,8 @@
 //! JSON array, one object per line, oldest first. With `:csv`, a table
 //! as CSV instead: the columns of the `timew-tui` table plus the
 //! annotation, one row per interval and day, separated by
-//! `export.csv.separator` (a comma by default; see
+//! `export.csv.separator` (a comma by default), decimal hours with
+//! `export.csv.decimal` (a point by default; see
 //! [`timew_core::summary::to_csv`]).
 
 use crate::database::Tracked;
@@ -24,9 +25,9 @@ pub fn run(s: &mut Session) -> Result<i32, String> {
         (Range::empty(), s.tracked_ids(&ids)?)
     };
     if s.cli.has_hint("csv") {
-        use crate::summary::{CSV_SEPARATOR_SETTING, build, csv_separator, to_csv};
-        let separator = csv_separator(s.rules.get(CSV_SEPARATOR_SETTING))?;
-        s.out.push_str(&to_csv(&build(&range, &tracked), separator));
+        use crate::summary::{CsvFormat, build, to_csv};
+        let format = CsvFormat::from_settings(|name| s.rules.get(name))?;
+        s.out.push_str(&to_csv(&build(&range, &tracked), format));
     } else {
         s.out.push_str(&json_array(&tracked));
     }

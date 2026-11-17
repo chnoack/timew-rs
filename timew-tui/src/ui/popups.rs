@@ -277,9 +277,12 @@ pub(crate) fn draw_export(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::styled(format!("{n} row{} of the table, with annotations", if n == 1 { "" } else { "s" }), hint),
         Line::styled(format!("Relative to {dir}"), hint),
         Line::styled(
-            match app.csv_separator() {
-                Ok('\t') => "Separator: tab (export.csv.separator)".to_string(),
-                Ok(c) => format!("Separator: {c} (export.csv.separator)"),
+            match app.csv_format() {
+                Ok(f) => {
+                    let sep = if f.separator == '\t' { "tab".to_string() } else { f.separator.to_string() };
+                    let bom = if f.bom { "  ·  BOM" } else { "" };
+                    format!("Separator {sep}  ·  decimal {}{bom}  (export.csv.*)", f.decimal)
+                }
                 Err(e) => e,
             },
             hint,

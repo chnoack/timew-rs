@@ -205,9 +205,16 @@ W47,2026-11-16,Mon,meetings,14:15,15:15,1:00,3.00,"weekly, with notes"
 - Fields are separated by a comma, or by `export.csv.separator`: one
   character (not `"`), or `tab`. Fields with the separator, a quote or a
   line break are in double quotes.
+- Total has a decimal point, or `export.csv.decimal`: one character (not
+  `"`, a digit or `-`), e.g. `,` for `2,50`.
+- The file is UTF-8, without a byte-order mark unless `export.csv.bom` is
+  on. Excel needs the mark to recognize UTF-8 when a file is opened
+  directly (otherwise `ü` shows as `Ã¼`).
 
 ```
 $ timew-cli config export.csv.separator ';'
+$ timew-cli config export.csv.decimal ','
+$ timew-cli config export.csv.bom on
 $ timew-cli export :csv :month rc.export.csv.separator=tab   # just this once
 ```
 

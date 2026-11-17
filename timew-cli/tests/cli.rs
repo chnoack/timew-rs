@@ -363,6 +363,12 @@ fn export_as_csv() {
     assert_eq!(one_day.lines().count(), 2, "{one_day}");
     let semi = db.ok(&["export", ":csv", "2025-03-03", "rc.export.csv.separator=;"]);
     assert!(semi.starts_with("Wk;Date;Day;") && semi.contains(";meetings, team;8:00;"), "{semi}");
+    let german = db.ok(&["export", ":csv", "2025-03-03", "rc.export.csv.separator=;", "rc.export.csv.decimal=,"]);
+    assert!(german.contains(";10:00;10:30;0:30;2,50;inbox, zero\n"), "{german}");
+    let bom = db.ok(&["export", ":csv", "rc.export.csv.bom=on"]);
+    assert!(bom.starts_with("\u{feff}Wk,Date,"), "{bom:?}");
+    let bad = db.fail(&["export", ":csv", "rc.export.csv.decimal=1"]);
+    assert!(bad.contains("export.csv.decimal"), "{bad}");
     let tab = db.ok(&["export", ":csv", "2025-03-04", "rc.export.csv.separator=tab"]);
     assert!(tab.contains("\tTue\temail\t9:00\t"), "{tab}");
     let bad = db.fail(&["export", ":csv", "rc.export.csv.separator=;;"]);

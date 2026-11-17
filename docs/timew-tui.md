@@ -256,22 +256,35 @@ W47,2026-11-16,Mon,"meetings, team",8:05,10:05,2:00,2.25,"weekly, with notes"
 - The cells are as in the table: times as `H:MM`, Total (on the last row
   of a day) in decimal hours, uncounted entries (`_tag`) with their time
   but left out of Total.
-- Commas separate the fields, unless `export.csv.separator` in
-  `timewarrior.cfg` says otherwise (see below); the dialog shows the one
-  in use. A field with the separator, a quote or a line break is in double
+- Commas separate the fields and Total has a decimal point, unless
+  `export.csv.separator` and `export.csv.decimal` in `timewarrior.cfg` say
+  otherwise (see below); the dialog shows both. A field with the separator, a quote or a line break is in double
   quotes (`"` doubled), as spreadsheets expect.
 - If the file exists, `Enter` asks first; a second `Enter` overwrites it.
   Afterwards a message shows the number of rows and the full path.
 
-`timew-cli export :csv` writes the same format, with the same setting:
+`timew-cli export :csv` writes the same format, with the same settings:
 
 ```
-export.csv.separator = ;      # e.g. for a German Excel
-export.csv.separator = tab    # tab-separated
+export.csv.separator = ;      # e.g. for a German Excel ...
+export.csv.decimal = ,        # ... which also expects 2,50 instead of 2.50
 ```
 
-The value is one character (not `"`; `#` starts a comment in the file) or
-`tab`; unset or empty means a comma. The file is read at each export, so a
+| Setting | Values | Default |
+| --- | --- | --- |
+| `export.csv.separator` | One character (not `"`), or `tab` | `,` |
+| `export.csv.decimal` | One character (not `"`, a digit or `-`) | `.` |
+| `export.csv.bom` | `on` / `off`: start the file with the UTF-8 byte-order mark | `off` |
+
+`#` can't be used: it starts a comment in the file. Unset or empty means
+the default.
+
+The file is UTF-8. Excel (on macOS and Windows) only recognizes that when
+the file starts with a byte-order mark; without one it shows `ü` as `Ã¼`
+when the file is opened by double-click. `export.csv.bom = on` writes the
+mark, which most other programs ignore (some Unix tools show it as a stray
+character before `Wk`). If separator and decimal are the same character (`,`), Total is put in quotes
+(`"2,50"`), which is still valid CSV. The file is read at each export, so a
 change applies without restarting. An invalid value is reported in the
 dialog and nothing is written.
 

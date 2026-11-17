@@ -162,30 +162,83 @@ pub const CSV_HEADERS: [&str; 9] = ["Wk", "Date", "Day", "Tags", "Start", "End",
 
 /// The setting for the field separator of [`to_csv`].
 pub const CSV_SEPARATOR_SETTING: &str = "export.csv.separator";
+/// The setting for the decimal separator of the Total column of [`to_csv`].
+pub const CSV_DECIMAL_SETTING: &str = "export.csv.decimal";
+/// The setting for a UTF-8 byte-order mark at the start of [`to_csv`].
+pub const CSV_BOM_SETTING: &str = "export.csv.bom";
+
+/// How [`to_csv`] writes its fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CsvFormat {
+    /// Between the fields (`export.csv.separator`).
+    pub separator: char,
+    /// In the decimal hours of Total (`export.csv.decimal`).
+    pub decimal: char,
+    /// Start with the UTF-8 byte-order mark, so Excel recognizes the
+    /// encoding when the file is opened directly (`export.csv.bom`).
+    pub bom: bool,
+}
+
+impl Default for CsvFormat {
+    /// Comma-separated, with a decimal point, without a byte-order mark.
+    fn default() -> Self {
+        CsvFormat { separator: ',', decimal: '.', bom: false }
+    }
+}
+
+impl CsvFormat {
+    /// The format from the settings `export.csv.separator` (one character,
+    /// or `tab`; a comma when unset or empty) and `export.csv.decimal` (one
+    /// character; a point when unset or empty) and `export.csv.bom` (a
+    /// boolean, off by default). `get` looks up a setting.
+    pub fn from_settings<'a>(get: impl Fn(&str) -> Option<&'a str>) -> Result<CsvFormat, String> {
+        let separator = csv_separator(get(CSV_SEPARATOR_SETTING))?;
+        let value = get(CSV_DECIMAL_SETTING).unwrap_or("").trim();
+        let decimal = match one_char(value) {
+            None if value.is_empty() => '.',
+            Some(c) if !c.is_ascii_digit() && c != '-' => c,
+            _ => {
+                return Err(format!(
+                    "{CSV_DECIMAL_SETTING} must be one character (not a quote, digit or '-'), not '{value}'."
+                ));
+            }
+        };
+        let bom = get(CSV_BOM_SETTING).is_some_and(crate::text::is_true);
+        Ok(CsvFormat { separator, decimal, bom })
+    }
+}
+
+/// The single character of `value`, if it is one that can be used in a
+/// CSV format (not a quote or line break).
+fn one_char(value: &str) -> Option<char> {
+    let mut chars = value.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c != '"' && c != '\n' && c != '\r' => Some(c),
+        _ => None,
+    }
+}
 
 /// The field separator from the value of `export.csv.separator`: one
 /// character, or `tab`; a comma when unset or empty.
 pub fn csv_separator(value: Option<&str>) -> Result<char, String> {
     let value = value.unwrap_or("").trim();
-    let mut chars = value.chars();
-    match (chars.next(), chars.next()) {
-        (None, _) => Ok(','),
-        (Some(c), None) if c != '"' && c != '\n' && c != '\r' => Ok(c),
-        _ if value.eq_ignore_ascii_case("tab") || value == "\\t" => Ok('\t'),
-        _ => Err(format!(
-            "{CSV_SEPARATOR_SETTING} must be one character (not a quote) or 'tab', not '{value}'."
-        )),
+    match one_char(value) {
+        Some(c) => Ok(c),
+        None if value.is_empty() => Ok(','),
+        None if value.eq_ignore_ascii_case("tab") || value == "\\t" => Ok('\t'),
+        None => Err(format!("{CSV_SEPARATOR_SETTING} must be one character (not a quote) or 'tab', not '{value}'.")),
     }
 }
 
-/// The rows as CSV (as in RFC 4180, but with `\n` line ends and any
-/// `separator`: fields with the separator, a quote or a line break in
-/// double quotes), with a heading line.
+/// The rows as CSV (as in RFC 4180, but with `\n` line ends and the
+/// separators of `format`: fields with the field separator, a quote or a
+/// line break in double quotes), with a heading line.
 /// The cells are those of the `timew-tui` table: Wk, Date and Day on every
 /// row (not only the first of a day), times as `H:MM`, the daily total in
 /// decimal hours on the last row of a day.
-pub fn to_csv(summary: &Summary, separator: char) -> String {
-    let mut out = String::new();
+pub fn to_csv(summary: &Summary, format: CsvFormat) -> String {
+    let separator = format.separator;
+    let mut out = String::from(if format.bom { "\u{feff}" } else { "" });
     let mut line = |cells: &[&str]| {
         let fields: Vec<String> = cells.iter().map(|c| csv_field(c, separator)).collect();
         out.push_str(&fields.join(separator.encode_utf8(&mut [0; 4])));
@@ -197,7 +250,9 @@ pub fn to_csv(summary: &Summary, separator: char) -> String {
         if let (Some(w), Some(d), Some(n)) = (&r.week, &r.date, &r.day_name) {
             (week, date, day) = (w.clone(), d.clone(), n.clone());
         }
-        let total = parse_hms(&r.total).map(|s| format!("{:.2}", s as f64 / 3600.0)).unwrap_or_default();
+        let total = parse_hms(&r.total)
+            .map(|s| format!("{:.2}", s as f64 / 3600.0).replace('.', format.decimal.encode_utf8(&mut [0; 4])))
+            .unwrap_or_default();
         line(&[
             &week,
             &date,
@@ -278,21 +333,31 @@ mod tests {
             tracked(2, at(1, 10, 0, 0), at(1, 10, 30, 0), &["c"], None),
         ];
         let summary = build_at(&Range::new(at(1, 0, 0, 0), at(2, 0, 0, 0)), &t, at(5, 0, 0, 0));
-        let csv = to_csv(&summary, ',');
+        let csv = to_csv(&summary, CsvFormat::default());
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], "Wk,Date,Day,Tags,Start,End,Time,Total,Annotation");
         assert_eq!(lines[1], "W40,2026-10-01,Thu,\"a, b\",8:00,9:30,1:30,,\"say \"\"hi\"\", then go\"");
         assert_eq!(lines[2], "W40,2026-10-01,Thu,c,10:00,10:30,0:30,2.00,");
         assert_eq!(lines.len(), 3);
         assert!(csv.ends_with('\n'));
+        assert!(!csv.starts_with('\u{feff}'));
+        let with_bom = to_csv(&summary, CsvFormat { bom: true, ..CsvFormat::default() });
+        assert_eq!(with_bom.as_bytes()[..3], [0xEF, 0xBB, 0xBF]);
+        assert_eq!(with_bom[3..], csv);
 
-        let csv = to_csv(&summary, ';');
+        let csv = to_csv(&summary, CsvFormat { separator: ';', decimal: '.', bom: false });
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], "Wk;Date;Day;Tags;Start;End;Time;Total;Annotation");
         // the comma needs no quotes any more, the quote still does
         assert_eq!(lines[1], "W40;2026-10-01;Thu;a, b;8:00;9:30;1:30;;\"say \"\"hi\"\", then go\"");
         assert_eq!(lines[2], "W40;2026-10-01;Thu;c;10:00;10:30;0:30;2.00;");
-        assert!(to_csv(&summary, '\t').starts_with("Wk\tDate\t"));
+        assert!(to_csv(&summary, CsvFormat { separator: '\t', decimal: '.', bom: false }).starts_with("Wk\tDate\t"));
+
+        // a decimal comma, quoted when it is also the field separator
+        let csv = to_csv(&summary, CsvFormat { separator: ';', decimal: ',', bom: false });
+        assert!(csv.lines().nth(2).unwrap().ends_with(";0:30;2,00;"), "{csv}");
+        let csv = to_csv(&summary, CsvFormat { separator: ',', decimal: ',', bom: false });
+        assert!(csv.lines().nth(2).unwrap().ends_with(",0:30,\"2,00\","), "{csv}");
     }
 
     #[test]
@@ -306,6 +371,29 @@ mod tests {
         assert_eq!(csv_separator(Some("\\t")), Ok('\t'));
         assert!(csv_separator(Some(";;")).is_err());
         assert!(csv_separator(Some("\"")).is_err());
+    }
+
+    #[test]
+    fn csv_format_from_settings() {
+        let none = |_: &str| None;
+        assert_eq!(CsvFormat::from_settings(none), Ok(CsvFormat::default()));
+        let german = |k: &str| match k {
+            CSV_SEPARATOR_SETTING => Some(";"),
+            CSV_DECIMAL_SETTING => Some(","),
+            _ => None,
+        };
+        assert_eq!(CsvFormat::from_settings(german), Ok(CsvFormat { separator: ';', decimal: ',', bom: false }));
+        let bom = |k: &str| (k == CSV_BOM_SETTING).then_some("on");
+        assert!(CsvFormat::from_settings(bom).unwrap().bom);
+        let off = |k: &str| (k == CSV_BOM_SETTING).then_some("off");
+        assert!(!CsvFormat::from_settings(off).unwrap().bom);
+        for bad in ["5", "-", "\"", ",,"] {
+            let get = |k: &str| (k == CSV_DECIMAL_SETTING).then_some(bad);
+            let err = CsvFormat::from_settings(get).unwrap_err();
+            assert!(err.contains(CSV_DECIMAL_SETTING), "{bad}: {err}");
+        }
+        let get = |k: &str| (k == CSV_SEPARATOR_SETTING).then_some(";;");
+        assert!(CsvFormat::from_settings(get).unwrap_err().contains(CSV_SEPARATOR_SETTING));
     }
 
     #[test]
