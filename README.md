@@ -15,12 +15,6 @@ database. It consists of two programs:
 - **timew-tui:** a terminal UI for browsing the data, starting and stopping
   tracking, and editing or deleting entries.
 
-> **Status:** `timew-cli` implements all of Timewarrior's commands: tracking
-> (`start`, `stop`, `track`, `continue`, …), editing (`modify`, `move`,
-> `tag`, `join`, `split`, …), the reports (`summary`, `day`,
-> `week`, `month`, `gaps`, …), extensions and configuration, except
-> `undo`. It passes Timewarrior's own test suite (apart from the `undo`
-> tests). `timew-tui` browses the data and can edit entries.
 
 ![timew-cli showing a summary and a week chart of the example data](docs/images/timew-cli.jpg)
 
