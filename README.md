@@ -259,6 +259,33 @@ programs share the same files, so `timew-cli` and `timew-tui` can be used on
 an existing Timewarrior database, and Timewarrior can keep using a database
 that `timew-cli` wrote to.
 
+### Differences from Timewarrior
+
+The data format is the same, but `timew-cli` deliberately behaves
+differently in a few places. The ones you are most likely to notice:
+
+- **Underscore tags don't count:** an entry with a tag that starts with
+  exactly one underscore (`_break`, `_private`; not `__x` or `x_y`) is
+  still listed, but left out of all totals: the daily and grand totals of
+  `summary`, the totals and the "Tracked" line of `day`, `week` and
+  `month`, and in `timew-tui` the Total column, the status line and the
+  chart's total and percentages. The whole entry is left out, also when it
+  has other tags (`_break meetings`). Timewarrior has no such rule and
+  treats these as ordinary tags, so **on the same database its totals
+  include these entries** and are higher.
+- **No undo:** there is no `undo` command and no undo journal
+  (`data/undo.data`); changes are final. `timew-tui` can undo its last
+  change with `u`. An `undo.data` written by Timewarrior is left alone.
+- **New command `info`:** version, license and project page.
+- **Dates as ranges:** `2025-03` means the whole month and `2025-W10` the
+  whole week (Timewarrior: only the first day); days are calendar days,
+  also around daylight saving changes.
+- **`annotate`** uses all words after the IDs as the annotation
+  (Timewarrior: only the last word).
+
+The complete list, with the smaller differences, is in
+[docs/timew-cli.md](docs/timew-cli.md#differences-from-timewarrior).
+
 ## License
 
 MIT, see [LICENSE](LICENSE). timew-rs is based on Timewarrior, which is
