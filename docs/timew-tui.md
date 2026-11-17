@@ -292,7 +292,8 @@ is the tag's strong color and the second part a lighter shade of it.)
   drawn with eighth blocks.
 - **Entries without a tag** are shown as "(no tag)", in gray.
 - **`_` tags** (one leading underscore, see above) get a bar with their
-  hours but no percentage, as they are not part of the total. An entry
+  hours (in light gray instead of yellow) but no percentage, as they are
+  not part of the total. An entry
   with such a tag counts only for its `_` tags, not for its other tags, so
   the other bars still add up to the total.
 - **Legend:** when there is shared time, the Total line explains the two

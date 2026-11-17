@@ -196,10 +196,10 @@ pub(crate) fn draw_chart(frame: &mut Frame, area: Rect, app: &App) {
             let pct = if sum > 0.0 { t.share * 100.0 / sum } else { 0.0 };
             let mut spans = vec![Span::styled(format!("{:<name_w$}  ", t.tag), Style::new().fg(strong))];
             spans.extend(stacked_bar(t.share / max, t.shared / max, bar_w, strong, light));
-            spans.push(Span::styled(
-                format!("  {:>value_w$} h", decimal_hours_f(t.share)),
-                Style::new().fg(Color::Yellow).bold(),
-            ));
+            // an `_tag` isn't part of the total: its hours in light gray
+            let value_style =
+                if is_uncounted_tag(&t.tag) { Style::new().fg(Color::Gray) } else { Style::new().fg(Color::Yellow).bold() };
+            spans.push(Span::styled(format!("  {:>value_w$} h", decimal_hours_f(t.share)), value_style));
             if let Some(w) = shared_w {
                 let text = if t.shared > 0.0 {
                     format!("  +{:>w$} h", decimal_hours_f(t.shared))

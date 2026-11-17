@@ -237,6 +237,14 @@ fn underscore_tags_are_left_out_of_the_totals() {
     assert!(line("meetings").contains("2.00 h") && line("meetings").contains("67 %"), "{}", line("meetings"));
     assert!(line("email").contains("33 %"));
     assert!(line("_break").contains("1.00 h") && !line("_break").contains('%'), "{}", line("_break"));
+    // in the chart, the hours of _break are light gray, the others yellow
+    let hours_color = |tag: &str| {
+        let y = text.iter().position(|l| l.contains(&format!("  {tag} ")) && l.contains(" h ")).unwrap();
+        let x = text[y][..text[y].find(" h ").unwrap()].chars().count() as u16 - 1;
+        buf[(x, y as u16)].fg
+    };
+    assert_eq!(hours_color("_break"), Color::Gray);
+    assert_eq!(hours_color("meetings"), Color::Yellow);
     // the _break row's time is gray, the others are not
     let row = text.iter().position(|l| l.contains("_break, meetings")).unwrap() as u16;
     let time_x = |l: &str| l[..l.find(" 1:00 ").unwrap() + 1].chars().count() as u16;
