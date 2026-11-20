@@ -3,10 +3,11 @@
 
 use timew_core::database::Database;
 use timew_core::interval::Interval;
+use timew_core::{start_interval_at, this_minute};
 use timew_core::paths::Paths;
 
 use crate::app::App;
-use crate::filter::Filter;
+use crate::filter::{Filter, day_range};
 use crate::format::{format_hm, local_moment};
 use crate::forms::{DeleteDialog, EditForm, StartForm, parse_tags, tags_to_text};
 
@@ -161,6 +162,43 @@ impl App {
         }
     }
 
+    /// `⇧S`: ask for the tags and annotation of a new entry that starts
+    /// right after the last one: now if one is running (that one is
+    /// stopped now), else when the last entry of today ended, else at 9:00
+    /// (or now, if that is earlier).
+    pub(crate) fn start_after_last(&mut self) {
+        let now = this_minute();
+        let hm = |e: i64| local_moment(e).get(11..16).unwrap_or("00:00").to_string();
+        let (start, stops_running, note) = if let Some(running) = &self.running {
+            let tags = if running.tags.is_empty() { String::new() } else { format!(" ({})", running.tags.join(", ")) };
+            (now, true, format!("Stops the running entry{tags}; the new one starts now, {}.", hm(now)))
+        } else {
+            let today = day_range(jiff::Zoned::now().date());
+            let last_end = Database::open(self.db_root.join("data"))
+                .ok()
+                .and_then(|mut db| db.intervals().ok().map(|all| {
+                    all.iter()
+                        .filter(|i| i.range.is_ended() && i.range.end > today.start && i.range.end <= now)
+                        .map(|i| i.range.end)
+                        .max()
+                }))
+                .flatten();
+            match last_end {
+                Some(end) => (end, false, format!("The entry starts at {}, when the last one ended.", hm(end))),
+                None => {
+                    let nine = jiff::Zoned::now().date().at(9, 0, 0, 0).to_zoned(jiff::tz::TimeZone::system())
+                        .map_or(today.start + 9 * 3600, |z| z.timestamp().as_second());
+                    if nine <= now {
+                        (nine, false, "No entry today yet: the entry starts at 09:00.".to_string())
+                    } else {
+                        (now, false, "No entry today yet: the entry starts now (before 09:00).".to_string())
+                    }
+                }
+            }
+        };
+        self.start_form = Some(StartForm { start: Some(start), stops_running, note, ..StartForm::default() });
+    }
+
     /// Start the new entry from the start dialog, then show it: the view
     /// switches to today, and the entry is selected and its details open.
     pub(crate) fn start_entry(&mut self) {
@@ -170,8 +208,10 @@ impl App {
             Err(e) => return form.error = Some(e),
         };
         let annotation = form.fields[1].clone();
+        let start = form.start.unwrap_or_else(this_minute);
+        let stops_running = form.stops_running;
         let paths = self.edit_paths();
-        let (started, changes) = match timew_core::start_interval(&paths, &tags, Some(&annotation)) {
+        let (started, changes) = match start_interval_at(&paths, start, stops_running, &tags, Some(&annotation)) {
             Ok(result) => result,
             Err(e) => return self.start_form.as_mut().unwrap().error = Some(e),
         };
@@ -190,7 +230,9 @@ impl App {
             self.details = true;
         }
         let what = if started.tags.is_empty() { String::new() } else { format!(" {}", tags_to_text(&started.tags)) };
-        self.notice = Some(format!("Started{what}. s stops it, u undoes it."));
+        let at = local_moment(started.range.start).get(11..16).unwrap_or("").to_string();
+        let stopped = if stops_running { "Stopped the running entry. " } else { "" };
+        self.notice = Some(format!("{stopped}Started{what} at {at}. s stops it, u undoes it."));
         self.notice_failed = false;
     }
 
@@ -210,7 +252,7 @@ impl App {
                 if let Some(i) = row.or(selected.filter(|i| *i < self.summary.rows.len())) {
                     self.table.select(Some(i));
                 }
-                let duration = format_hm(jiff::Timestamp::now().as_second() - before.range.start);
+                let duration = format_hm(this_minute() - before.range.start);
                 self.notice = Some(format!("Stopped after {duration}. u undoes it."));
                 self.notice_failed = false;
             }

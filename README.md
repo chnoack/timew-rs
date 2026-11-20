@@ -216,7 +216,10 @@ A separate program for browsing the summary interactively:
   one of the last 5 years (Shift+4), a form for your own date range (`5`),
   and a tag list (`6`).
 - **Tracking:** `s` starts a new entry (asking for tags and annotation)
-  or stops the running one; a running entry's details have a red border.
+  or stops the running one; Shift+S starts one right after the last entry
+  (stopping a running one). Times are kept to the full minute, so there
+  are no hidden gaps of seconds. A running entry's details have a red
+  border.
 - **Editing:** `e` edits the start and end date and time, the tags and the
   annotation of the selected entry in the details panel; `a` adds a new
   entry right after it (30 minutes, starting when it ends); `d` deletes it

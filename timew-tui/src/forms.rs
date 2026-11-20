@@ -31,6 +31,12 @@ pub(crate) struct StartForm {
     pub(crate) error: Option<String>,
     /// The last key typed a character, so a tag may be suggested.
     pub(crate) suggest: bool,
+    /// When the entry starts (`⇧S`); None: now.
+    pub(crate) start: Option<i64>,
+    /// Stop the running entry at `start` first (`⇧S`).
+    pub(crate) stops_running: bool,
+    /// Says when the entry starts; empty: "now".
+    pub(crate) note: String,
 }
 
 impl StartForm {

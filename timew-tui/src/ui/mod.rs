@@ -8,7 +8,7 @@ pub(crate) mod popups;
 pub(crate) mod table;
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
@@ -34,6 +34,21 @@ pub(crate) const FOCUS: Color = Color::Yellow;
 /// A suggested tag after the text of a field (dark gray on the active
 /// field's light background).
 pub(crate) const SUGGESTION: Color = Color::DarkGray;
+
+/// Background of the text cursor in an input field. The fields are drawn
+/// reversed (light), where the terminal's own cursor is hard to see, so
+/// the cursor cell is painted: white on blue.
+pub(crate) const CURSOR: Color = Color::Blue;
+
+/// Paint the text cursor at `pos`. The terminal's cursor stays hidden: as
+/// a block it would invert the painted cell again.
+pub(crate) fn draw_cursor(frame: &mut Frame, pos: Position) {
+    if let Some(cell) = frame.buffer_mut().cell_mut(pos) {
+        cell.modifier.remove(Modifier::REVERSED);
+        cell.modifier.insert(Modifier::BOLD);
+        cell.set_fg(Color::White).set_bg(CURSOR);
+    }
+}
 
 /// The hint under a tags field with a suggestion; it names the tag, which
 /// shows its case even when only the case differs from what was typed.

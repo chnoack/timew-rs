@@ -201,7 +201,7 @@ pub(crate) fn draw_start_form(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::raw(""),
         Line::from([vec![label("Annotation")], field(1)].concat()),
         Line::raw(""),
-        Line::styled("The entry starts now.", Style::new().dim()),
+        Line::styled(if form.note.is_empty() { "The entry starts now." } else { form.note.as_str() }, Style::new().dim()),
         last,
     ];
     let fields = [Rect::new(inner.x + LABEL_W, inner.y, field_w, 1), Rect::new(inner.x + LABEL_W, inner.y + 2, field_w, 1)];
@@ -210,7 +210,7 @@ pub(crate) fn draw_start_form(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Clear, popup);
     frame.render_widget(Paragraph::new(lines).block(block), popup);
     if active.width > 0 {
-        frame.set_cursor_position(cursor);
+        super::draw_cursor(frame, cursor);
     }
     app.start_fields = fields;
 }
@@ -256,7 +256,7 @@ pub(crate) fn draw_range_input(frame: &mut Frame, area: Rect, app: &mut App) {
     let cursor_x = active.x + 1 + input.active_len() as u16;
     frame.render_widget(Clear, popup);
     frame.render_widget(Paragraph::new(lines).block(block), popup);
-    frame.set_cursor_position(Position::new(cursor_x.min(active.right() - 1), active.y));
+    super::draw_cursor(frame, Position::new(cursor_x.min(active.right() - 1), active.y));
 }
 
 pub(crate) fn draw_export(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -305,7 +305,7 @@ pub(crate) fn draw_export(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Clear, popup);
     frame.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), popup);
     if inner.width > 0 && inner.height > 0 {
-        frame.set_cursor_position(Position::new(cursor_x.min(inner.right() - 1), inner.y));
+        super::draw_cursor(frame, Position::new(cursor_x.min(inner.right() - 1), inner.y));
     }
 }
 
@@ -384,6 +384,7 @@ pub(crate) fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         k("text", "tags: separated by spaces, \"two words\" in quotes"),
         k("text", "annotation: any text, empty removes it"),
         k("← → Home End", "move the cursor"),
+        k("Ctrl+A Ctrl+E", "start / end of the field"),
         k("⌫ Del  Ctrl+U", "delete / clear the field"),
         k("Enter", "save (overlaps are refused)"),
         k("⇧Enter  Alt+Enter", "save, adjusting overlapping entries"),
@@ -394,6 +395,7 @@ pub(crate) fn legend_lines() -> Vec<(Option<&'static str>, &'static str)> {
         h("Tracking"),
         k("s", "start a new entry (asks for tags and annotation)"),
         k("s", "stop the running entry (when one is running)"),
+        k("⇧S", "start right after the last entry (stops a running one)"),
         h("In lists and the date form"),
         k("↑ ↓  j k", "move"),
         k("← →", "change the year (month list)"),

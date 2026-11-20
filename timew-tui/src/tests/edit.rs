@@ -109,12 +109,18 @@ fn edit_fields_overwrite_and_move_the_cursor() {
     key(&mut app, KeyCode::Home);
     key(&mut app, KeyCode::Delete);
     assert_eq!(app.edit.as_ref().unwrap().fields[0], "025-12-30");
-    // the terminal cursor follows
+    // the painted cursor follows: white on blue, the field around it reversed
     key(&mut app, KeyCode::End);
-    let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
-    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let cells = cursor_cells(&mut app);
     let field = app.edit_fields[0];
-    assert_eq!(terminal.get_cursor_position().unwrap(), Position::new(field.x + 1 + 9, field.y));
+    assert_eq!(cells, vec![Position::new(field.x + 1 + 9, field.y)]);
+    // Ctrl+A / Ctrl+E: start / end of the field
+    key_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+    assert_eq!(app.edit.as_ref().unwrap().cursor, 0);
+    assert_eq!(cursor_cells(&mut app), vec![Position::new(field.x + 1, field.y)]);
+    key_with(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+    assert_eq!(app.edit.as_ref().unwrap().cursor, 9);
+    assert_eq!(app.edit.as_ref().unwrap().fields[0], "025-12-30");
     let _ = fs::remove_dir_all(&root);
 }
 

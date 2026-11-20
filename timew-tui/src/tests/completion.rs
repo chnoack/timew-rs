@@ -112,10 +112,12 @@ fn start_form_suggests_and_tab_takes_it() {
     type_text(&mut app, "pl");
     let screen = render_at(&mut app, 140, 24);
     assert!(screen.contains(" planning") && screen.contains("Tab or → takes the suggested tag"), "{screen}");
-    // typed text normal, the suggestion dark gray (the field is reversed)
+    // typed text normal, the cursor after it, then the rest of the
+    // suggestion dark gray (the field is reversed)
     let colors = colors_of(&mut app, "planning");
     assert!(colors[..2].iter().all(|(_, bg)| *bg == Color::Reset), "{colors:?}");
-    assert!(colors[2..].iter().all(|(_, bg)| *bg == Color::DarkGray), "{colors:?}");
+    assert_eq!(colors[2], (Color::White, crate::ui::CURSOR), "{colors:?}");
+    assert!(colors[3..].iter().all(|(_, bg)| *bg == Color::DarkGray), "{colors:?}");
 
     key(&mut app, KeyCode::Tab);
     let form = app.start_form.as_ref().unwrap();

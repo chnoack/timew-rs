@@ -138,6 +138,25 @@ the running one otherwise. The help line shows `s start` or `s stop`.
 - `u` undoes a start or a stop like an edit.
 - Starting refuses if the new entry would overlap a later one; stopping
   refuses if the running entry starts in the future.
+- **Full minutes:** starting and stopping use the current time cut off to
+  the minute (10:42:37 becomes 10:42:00). The TUI shows times to the
+  minute, so seconds would make gaps of a few seconds that you can't see,
+  between entries that look seamless. Because of that, an entry can only
+  be stopped once its first minute has passed. (`timew-cli start` and
+  `stop` keep the seconds, like Timewarrior.)
+
+**Shift+S** starts a new entry **right after the last one**, with the same
+dialog (tags and annotation):
+
+- If an entry is **running**, it is stopped now and the new one starts now,
+  so there is no gap between them.
+- Otherwise the new entry starts when the **last entry of today ended**,
+  filling the time since then.
+- If there is **no entry today**, it starts at **09:00** (or now, before
+  09:00).
+
+The dialog says when the entry will start. `u` undoes the whole step: a
+stopped entry runs again, and the new one is gone.
 
 ### Deleting an entry
 
@@ -176,6 +195,8 @@ table):
 ╰────── Enter save · ⇧Enter adjust · Esc cancel ╯
 ```
 
+- The cursor is a white-on-blue cell, so it stands out on the light
+  field (the same in all dialogs).
 - The cursor starts at the beginning of the start date. Typing replaces
   the digits under the cursor, so you can simply type the new value over
   the old one; `Tab` goes to the next field.
@@ -400,6 +421,7 @@ is the tag's strong color and the second part a lighter shade of it.)
 | `Home` `End` / `g` `G` | First or last row |
 | `Enter` | Open or close the details (narrow layout) |
 | `s` | **Start** a new entry (asks for tags and annotation), or **stop** the running one |
+| **Shift+S** | **Start right after the last entry**: stops a running one, else starts when today's last entry ended, else at 09:00 (see [Starting and stopping](#starting-and-stopping)) |
 | `e` | **Edit** the start, end, tags and annotation of the selected entry |
 | `a` | **Add** an entry right after the selected one (see [Adding an entry](#adding-an-entry)) |
 | `d` | **Delete** the selected entry, after asking (`y` deletes) |
@@ -446,9 +468,9 @@ legend (`?`) works the same way.
 | **Tag list** (`6`) | "All tags" plus every tag in the database with its entry count · `↑↓`/`jk`, `PgUp`/`PgDn` and `g`/`G` move · `Enter`/`Space` select · `⌫` **remove the tag filter** · `Esc`/`q`/`6` close |
 | **Date range** (`c`) | Type into **From**/**To** · `Tab`/`↑↓` or a click switches fields · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` apply · `Esc` cancel |
 | **Delete** (`d`) | Shows the entry (ID, tags, annotation, start, end, duration, and the days it spans) · `y` deletes · `e` deletes and extends the previous entry to its end (only offered if there is one; the dialog shows which) · `n`/`Esc`/`q` cancel · `Enter`, other keys and clicks do nothing |
-| **Start dialog** (`s`) | Type the tags and the annotation · `Tab`/`↑↓` switch fields · `←→`, `Home`/`End` move the cursor · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` start · `Esc` cancel |
+| **Start dialog** (`s`, Shift+S) | Type the tags and the annotation · `Tab`/`↑↓` switch fields · `←→`, `Home`/`End`, `Ctrl+A`/`Ctrl+E` move the cursor · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` start · `Esc` cancel |
 | **Export** (`x`) | Type the file name · `⌫` deletes a character · `Ctrl+U` clears the field · `Enter` export (a second `Enter` overwrites an existing file) · `Esc` cancel |
-| **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous (start date, start time, end date, end time, tags, annotation) · in dates and times typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`); in the tags and the annotation it inserts · `←→`, `Home`/`End` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
+| **Edit form** (`e`) | `Tab`/`↓` next field, `Shift+Tab`/`↑` previous (start date, start time, end date, end time, tags, annotation) · in dates and times typing **overwrites** the character under the cursor and steps over `-` and `:` (type `0930` over `08:00` to get `09:30`); in the tags and the annotation it inserts · `←→`, `Home`/`End`, `Ctrl+A`/`Ctrl+E` move the cursor (`←→` continue into the next field at the ends) · `⌫`/`Del` delete · `Ctrl+U` clears the field · a click places the cursor · `Enter` save · `Shift+Enter`/`Alt+Enter` save and adjust overlapping entries · `Esc` cancel |
 
 Each list opens on the current choice: the month or year being shown, or the
 active tag.

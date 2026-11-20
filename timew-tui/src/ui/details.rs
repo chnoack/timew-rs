@@ -157,6 +157,6 @@ fn draw_edit(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
     app.edit_fields = fields;
     if has_cursor {
-        frame.set_cursor_position(cursor);
+        super::draw_cursor(frame, cursor);
     }
 }

@@ -195,3 +195,20 @@ fn edit_end(app: &mut App, end: &str, adjust: bool) {
     key_with(app, KeyCode::Enter, if adjust { KeyModifiers::ALT } else { KeyModifiers::NONE });
     assert!(app.edit.is_none(), "{:?}", app.edit.as_ref().and_then(|f| f.error.clone()));
 }
+
+/// The screen cells painted as the text cursor (white on blue).
+fn cursor_cells(app: &mut App) -> Vec<Position> {
+    let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+    terminal.draw(|f| draw(f, app)).unwrap();
+    let buf = terminal.backend().buffer();
+    let mut cells = Vec::new();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            let c = &buf[(x, y)];
+            if c.bg == crate::ui::CURSOR && c.fg == Color::White {
+                cells.push(Position::new(x, y));
+            }
+        }
+    }
+    cells
+}

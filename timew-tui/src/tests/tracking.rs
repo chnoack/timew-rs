@@ -51,13 +51,17 @@ fn s_stops_the_running_entry_and_keeps_the_view() {
     type_text(&mut app, "work");
     key(&mut app, KeyCode::Enter);
     let started = app.selected().unwrap().interval.clone();
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert_eq!(started.range.start % 60, 0, "started on the full minute");
+    // let it have started two minutes ago (it can only be stopped a minute
+    // after its start, as the end is cut to the minute too)
+    let started = backdate_running(&mut app, &root, 120);
 
     press(&mut app, '4'); // a different view while it runs
     press(&mut app, 's');
     assert_eq!(app.filter, Filter::Year, "stopping keeps the filters");
     let stopped = app.selected().unwrap().interval.clone();
     assert!(stopped.is_ended() && stopped.range.start == started.range.start, "the stopped entry stays selected");
+    assert_eq!(stopped.range.end % 60, 0, "stopped on the full minute");
     assert!(render_at(&mut app, 140, 24).contains("Stopped after"));
     assert!(footer(&mut app).starts_with(" ? help  s start "));
     assert_ne!(panel_border(&mut app, "Entry details"), Color::Red);
@@ -167,5 +171,100 @@ fn e_in_the_delete_dialog_extends_the_previous_entry() {
     press(&mut app, 'e');
     assert!(app.confirm_delete.is_some(), "still asking");
     press(&mut app, 'n');
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Move the start of the running entry `seconds` back (in the data file),
+/// reload, and return it.
+fn backdate_running(app: &mut App, root: &std::path::Path, seconds: i64) -> timew_core::interval::Interval {
+    let running = app.running.clone().expect("an entry is running");
+    let old = timew_core::interval::format_iso(running.range.start);
+    let new = timew_core::interval::format_iso(running.range.start - seconds);
+    for entry in fs::read_dir(root.join("data")).unwrap() {
+        let path = entry.unwrap().path();
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        if text.contains(&format!("inc {old} #")) || text.contains(&format!("inc {old}\n")) {
+            fs::write(&path, text.replace(&format!("inc {old}"), &format!("inc {new}"))).unwrap();
+        }
+    }
+    press(app, 'r');
+    let running = app.running.clone().unwrap();
+    assert_eq!(timew_core::interval::format_iso(running.range.start), new);
+    running
+}
+
+#[test]
+fn a_running_entry_can_be_stopped_a_minute_after_its_start() {
+    let root = yesterday_db("stop-early");
+    let mut app = App::new(root.clone());
+    app.config_dir = root.clone();
+    press(&mut app, 's');
+    key(&mut app, KeyCode::Enter);
+    let start = app.running.as_ref().unwrap().range.start;
+    press(&mut app, 's');
+    if timew_core::this_minute() == start {
+        // still the same minute (unless the test ran across a full minute)
+        assert!(app.notice.as_deref().unwrap().contains("less than a minute"), "{:?}", app.notice);
+        assert!(app.running.is_some());
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn shift_s_starts_after_the_last_entry_of_today() {
+    let root = yesterday_db("shift-s");
+    let mut app = App::new(root.clone());
+    app.config_dir = root.clone();
+    let now = timew_core::this_minute();
+    let nine = jiff::Zoned::now().date().at(9, 0, 0, 0).to_zoned(jiff::tz::TimeZone::system()).unwrap().timestamp().as_second();
+
+    // nothing today yet: 9:00 (or now, before 9:00)
+    press(&mut app, 'S');
+    let form = app.start_form.as_ref().unwrap();
+    assert_eq!(form.start, Some(nine.min(now)));
+    assert!(!form.stops_running);
+    assert!(render_at(&mut app, 140, 24).contains("No entry today yet"));
+    key(&mut app, KeyCode::Esc);
+
+    // after a finished entry of today: where it ends
+    let end = now - 600;
+    let line = format!(
+        "inc {} - {} # email\n",
+        timew_core::interval::format_iso(end - 1800),
+        timew_core::interval::format_iso(end)
+    );
+    let today = jiff::Zoned::now().date();
+    let file = root.join("data").join(format!("{:04}-{:02}.data", today.year(), today.month()));
+    let mut text = fs::read_to_string(&file).unwrap_or_default();
+    text.push_str(&line);
+    fs::write(&file, text).unwrap();
+    press(&mut app, 'r');
+    press(&mut app, 'S');
+    assert_eq!(app.start_form.as_ref().unwrap().start, Some(end));
+    assert!(render_at(&mut app, 140, 24).contains("when the last one ended"));
+    type_text(&mut app, "focus");
+    key(&mut app, KeyCode::Enter);
+    let running = app.running.clone().expect("started");
+    assert_eq!(running.range.start, end, "no gap to the last entry");
+    assert!(app.notice.as_deref().unwrap().starts_with("Started focus at "), "{:?}", app.notice);
+
+    // while one runs: it is stopped now, the new one starts now
+    let start_of_running = app.running.as_ref().unwrap().range.start;
+    if start_of_running < timew_core::this_minute() {
+        press(&mut app, 'S');
+        let form = app.start_form.as_ref().unwrap();
+        assert!(form.stops_running && form.start == Some(timew_core::this_minute()));
+        assert!(render_at(&mut app, 140, 24).contains("Stops the running entry (focus)"));
+        type_text(&mut app, "next");
+        key(&mut app, KeyCode::Enter);
+        let all = all_lines(&root);
+        let at = timew_core::interval::format_iso(app.running.as_ref().unwrap().range.start);
+        assert!(all.contains(&format!("- {at} # focus\n")) && all.contains(&format!("inc {at} # next\n")), "{all}");
+        assert!(app.notice.as_deref().unwrap().starts_with("Stopped the running entry. Started next"));
+        // u undoes both: focus is running again, next is gone
+        press(&mut app, 'u');
+        let all = all_lines(&root);
+        assert!(!all.contains("# next") && app.running.as_ref().unwrap().has_tag("focus"), "{all}");
+    }
     let _ = fs::remove_dir_all(&root);
 }

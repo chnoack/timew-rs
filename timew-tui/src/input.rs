@@ -39,6 +39,9 @@ impl App {
                 form.fields[form.field].clear();
                 form.cursor = 0;
             }
+            // Ctrl+A / Ctrl+E: start / end of the field, as in a shell
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => form.cursor = 0,
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => form.cursor = form.len(),
             KeyCode::Char(c) => form.type_char(c),
             // Shift+Enter (where the terminal reports it) or Alt+Enter: save and
             // adjust overlapping entries, like `timew modify … :adjust`
@@ -85,6 +88,8 @@ impl App {
                 form.fields[form.field].clear();
                 form.cursor = 0;
             }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => form.cursor = 0,
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => form.cursor = form.len(),
             KeyCode::Char(c) => form.insert(c),
             KeyCode::Enter => self.start_entry(),
             _ => {}
@@ -236,6 +241,7 @@ impl App {
             KeyCode::Char('x') => self.open_export(),
             KeyCode::Char('u') => self.undo_edit(),
             KeyCode::Char('s') => self.start_or_stop(),
+            KeyCode::Char('S') => self.start_after_last(),
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => self.reset_filters(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,

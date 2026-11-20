@@ -45,33 +45,64 @@ pub fn modify_interval(
     Ok((overlapping, s.changes))
 }
 
-/// Start tracking now, with `tags` and `annotation`, like `timew start`.
-/// Refused if an entry is already running. Returns the new entry.
+/// The current time cut off to the full minute. `timew-tui` shows times
+/// to the minute, so the entries it starts and stops have no seconds;
+/// otherwise two entries that look seamless could have a gap of a few
+/// seconds between them.
+pub fn this_minute() -> range::Epoch {
+    let now = datetime::now();
+    now - now.rem_euclid(60)
+}
+
+/// Start tracking now (to the minute), with `tags` and `annotation`, like
+/// `timew start`. Refused if an entry is already running. Returns the new
+/// entry.
 pub fn start_interval(
     paths: &paths::Paths,
     tags: &[String],
     annotation: Option<&str>,
 ) -> Result<(interval::Interval, Vec<Change>), String> {
+    start_interval_at(paths, this_minute(), false, tags, annotation)
+}
+
+/// Start tracking at `start` (not in the future), with `tags` and
+/// `annotation`. A running entry is stopped at `start` first if
+/// `stop_running`, else it is refused. Both happen as one change, which
+/// [`undo_change`] reverts as a whole. Returns the new entry.
+pub fn start_interval_at(
+    paths: &paths::Paths,
+    start: range::Epoch,
+    stop_running: bool,
+    tags: &[String],
+    annotation: Option<&str>,
+) -> Result<(interval::Interval, Vec<Change>), String> {
     let now = datetime::now();
-    let mut s = open_session(paths, now)?;
-    if s.db.latest()?.is_some_and(|l| l.is_open()) {
-        return Err("An entry is already running.".to_string());
+    if start > now {
+        return Err("A running entry cannot start in the future.".to_string());
     }
-    let mut interval = interval::Interval::new(range::Range::new(now, 0));
+    let mut s = open_session(paths, now)?;
+    if let Some(running) = s.db.latest()?.filter(|l| l.is_open()) {
+        if !stop_running {
+            return Err("An entry is already running.".to_string());
+        }
+        stop(&mut s, &running, start)?;
+    }
+    let mut interval = interval::Interval::new(range::Range::new(start, 0));
     for tag in tags {
         interval.add_tag(tag.clone());
     }
     interval.annotation = annotation.map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
     // A running entry has no end, so it would overlap everything stored
-    // after now (entries entered in advance, or still going on).
+    // after its start (entries entered in advance, or still going on).
     let later = s.tracked_in(&interval.range, &[])?;
     if let Some(first) = later.first() {
         let when = datetime::format_local_iso(first.interval.range.start).replace('T', " ");
         let when = &when[..16];
         let tags = if first.interval.tags.is_empty() { String::new() } else { format!(" ({})", first.interval.tags.join(", ")) };
+        let after = if start == now - now.rem_euclid(60) { "now" } else { "its start" };
         let what = match later.len() {
-            1 => format!("an entry after now: {when}{tags}"),
-            n => format!("{n} entries after now, the first {when}{tags}"),
+            1 => format!("an entry after {after}: {when}{tags}"),
+            n => format!("{n} entries after {after}, the first {when}{tags}"),
         };
         return Err(format!("A running entry would overlap {what}."));
     }
@@ -81,28 +112,37 @@ pub fn start_interval(
     Ok((interval, s.changes))
 }
 
-/// Stop the running entry now, like `timew stop`: excluded time inside it
-/// (configured exclusions) is cut out. Returns the entry as it was before.
+/// Stop the running entry now (to the minute), like `timew stop`:
+/// excluded time inside it (configured exclusions) is cut out. Returns the
+/// entry as it was before.
 pub fn stop_interval(paths: &paths::Paths) -> Result<(interval::Interval, Vec<Change>), String> {
-    let now = datetime::now();
-    let mut s = open_session(paths, now)?;
+    let mut s = open_session(paths, datetime::now())?;
     let running = match s.db.latest()? {
         Some(l) if l.is_open() => l,
         _ => return Err("No entry is running.".to_string()),
     };
-    if running.range.start >= now {
-        return Err("The running entry starts in the future; it can't be stopped yet.".to_string());
-    }
-    let mut stopped = running.clone();
-    stopped.range.end = now;
-    s.delete(&running)?;
-    validate::auto_adjust(&mut s, false, &stopped)?;
-    let exclusions = s.exclusions(&stopped.range)?;
-    for piece in flatten(&stopped, &exclusions, now) {
-        s.add(&piece)?;
-    }
+    stop(&mut s, &running, this_minute())?;
     s.db.commit()?;
     Ok((running, s.changes))
+}
+
+/// End the running entry `running` at `end` (not committed).
+fn stop(s: &mut Session, running: &interval::Interval, end: range::Epoch) -> Result<(), String> {
+    if running.range.start > datetime::now() {
+        return Err("The running entry starts in the future; it can't be stopped yet.".to_string());
+    }
+    if running.range.start >= end {
+        return Err("The running entry started less than a minute ago; it can't be stopped yet.".to_string());
+    }
+    let mut stopped = running.clone();
+    stopped.range.end = end;
+    s.delete(running)?;
+    validate::auto_adjust(s, false, &stopped)?;
+    let exclusions = s.exclusions(&stopped.range)?;
+    for piece in flatten(&stopped, &exclusions, end) {
+        s.add(&piece)?;
+    }
+    Ok(())
 }
 
 /// Delete the stored interval `interval`, like `timew delete`.
@@ -233,17 +273,27 @@ mod tests {
         let (started, start_changes) =
             start_interval(&paths, &["b".into(), "a".into()], Some("  first  ")).unwrap();
         assert!(started.is_open());
+        assert_eq!(started.range.start % 60, 0, "on the full minute");
         assert_eq!(started.tags, vec!["a", "b"]);
         assert_eq!(started.annotation.as_deref(), Some("first"));
         assert_eq!(stored(), vec![started.clone()]);
         assert!(start_interval(&paths, &[], None).unwrap_err().contains("already running"));
+        if this_minute() == started.range.start {
+            assert!(stop_interval(&paths).unwrap_err().contains("less than a minute"));
+        }
+        undo_change(&paths, &start_changes).unwrap();
+        assert!(stored().is_empty());
 
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // started five minutes ago, stopped now
+        let five_ago = this_minute() - 300;
+        let (started, start_changes) = start_interval_at(&paths, five_ago, false, &["a".into()], None).unwrap();
+        assert_eq!(started.range.start, five_ago);
         let (before, stop_changes) = stop_interval(&paths).unwrap();
         assert_eq!(before, started);
         let now = stored();
         assert_eq!(now.len(), 1);
         assert!(now[0].is_ended() && now[0].range.start == started.range.start);
+        assert_eq!(now[0].range.end % 60, 0, "stopped on the full minute");
 
         undo_change(&paths, &stop_changes).unwrap();
         assert_eq!(stored(), vec![started.clone()], "running again");
@@ -252,6 +302,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+
+    #[test]
+    fn start_at_stops_the_running_entry_in_one_change() {
+        let root = std::env::temp_dir().join(format!("timew-core-start-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let paths = paths::Paths { config_dir: root.clone(), db_dir: root.clone() };
+        let stored = || database::Database::open(root.join("data")).unwrap().intervals().unwrap().to_vec();
+        let now = this_minute();
+
+        assert!(start_interval_at(&paths, now + 120, false, &[], None).unwrap_err().contains("future"));
+        let (first, _) = start_interval_at(&paths, now - 600, false, &["one".into()], None).unwrap();
+        assert!(start_interval_at(&paths, now, false, &[], None).unwrap_err().contains("already running"));
+        let (second, changes) = start_interval_at(&paths, now, true, &["two".into()], None).unwrap();
+        let all = stored();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|i| i.has_tag("one") && i.range == range::Range::new(now - 600, now)));
+        assert!(all.contains(&second) && second.range.start == now && second.is_open());
+        // stopping it before its start is refused
+        assert!(start_interval_at(&paths, now - 900, true, &[], None).unwrap_err().contains("less than a minute"));
+        undo_change(&paths, &changes).unwrap();
+        assert_eq!(stored(), vec![first], "the first one runs again, the second is gone");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn start_names_the_entries_in_the_way() {
